@@ -458,7 +458,7 @@ private struct WorktreeInfoRow: View {
                     .foregroundStyle(.tertiary)
                 if !worktree.isMain {
                     HStack(spacing: 8) {
-                        if let pr {
+                        if let pr, !isPurging {
                             let prColor: Color = pr.state == "MERGED" ? .purple : .green
                             Link(destination: URL(string: pr.url)!) {
                                 HStack(spacing: 3) {
