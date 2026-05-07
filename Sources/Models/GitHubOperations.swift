@@ -99,6 +99,24 @@ enum GitHubOperations {
         }
     }
 
+    /// Fetch open and merged PRs for this repo, most-recent-first.
+    /// Closed-but-unmerged PRs are filtered out so they don't render a badge.
+    static func openAndMergedPRs(ghPath: String, at path: String, limit: Int = 100) -> [GitHubPR] {
+        guard let json = run(ghPath, args: ["pr", "list", "--state", "all", "--json", "number,title,state,headRefName,url", "--limit", "\(limit)"], in: path) else { return [] }
+        guard let data = json.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+
+        return array.compactMap { dict in
+            guard let number = dict["number"] as? Int,
+                  let title = dict["title"] as? String,
+                  let state = dict["state"] as? String,
+                  let branch = dict["headRefName"] as? String,
+                  let url = dict["url"] as? String else { return nil }
+            guard state == "OPEN" || state == "MERGED" else { return nil }
+            return GitHubPR(number: number, title: title, state: state, branch: branch, url: url)
+        }
+    }
+
     /// Find an open PR for a specific branch.
     static func prForBranch(ghPath: String, at path: String, branch: String) -> GitHubPR? {
         guard let json = run(ghPath, args: ["pr", "list", "--head", branch, "--json", "number,title,state,headRefName,url", "--limit", "1"], in: path) else { return nil }

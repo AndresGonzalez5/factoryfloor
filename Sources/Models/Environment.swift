@@ -412,7 +412,7 @@ final class AppEnvironment: ObservableObject {
     func refreshBranchPRs(for directory: String, branches: Set<String>) {
         guard ghAvailable, let ghPath = toolStatus.gh.path, !branches.isEmpty else { return }
         Task.detached {
-            let prs = GitHubOperations.openPRs(ghPath: ghPath, at: directory, limit: 100)
+            let prs = GitHubOperations.openAndMergedPRs(ghPath: ghPath, at: directory, limit: 100)
             let prsByBranch = Dictionary(prs.map { ($0.branch, $0) }, uniquingKeysWith: { first, _ in first })
             await MainActor.run {
                 self.commitChanges {
