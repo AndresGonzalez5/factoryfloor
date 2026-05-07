@@ -296,3 +296,10 @@
 "No GitHub remote found for this project." = "No se encontró un remoto de GitHub para este proyecto.";
 "Quick action debug" = "Depuración de acciones rápidas";
 "Show a debug panel with command output from quick actions (Create PR, Commit & Push)." = "Muestra un panel de depuración con la salida de las acciones rápidas (Crear PR, Commit y Push).";
+
+/* Sidebar - Agent state indicator */
+"Agent is working" = "El agente está trabajando";
+"Agent finished — needs review" = "El agente terminó — requiere revisión";
+"Agent is awaiting permission" = "El agente espera permiso";
+"Agent is idle" = "El agente está inactivo";
+"Worktree path missing" = "Falta la ruta del worktree";

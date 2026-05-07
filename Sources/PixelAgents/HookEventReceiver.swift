@@ -282,6 +282,17 @@ final class HookEventReceiver: @unchecked Sendable {
             logger.info("Hook SubagentStop: \(aid, privacy: .public)")
             return [AgentEvent.removed(agentId: aid)]
 
+        case "Notification":
+            // Claude Code emits Notification for permission prompts and idle
+            // reminders. The message field is the only signal we have; over-
+            // reporting permission is preferable to under-reporting.
+            let message = (eventInput["message"] as? String) ?? ""
+            let lower = message.lowercased()
+            let isPermission = lower.contains("permission") || lower.contains("approval")
+            let status = isPermission ? "permissionRequired" : "idleNotification"
+            logger.info("Hook Notification: status=\(status, privacy: .public)")
+            return [AgentEvent.status(agentId: "main", status: status)]
+
         default:
             logger.debug("Unhandled hook event: \(hookEventName, privacy: .public)")
             return []

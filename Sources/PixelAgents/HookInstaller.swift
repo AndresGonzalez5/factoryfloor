@@ -16,6 +16,7 @@ enum HookInstaller {
         "SubagentStart",
         "SubagentStop",
         "UserPromptSubmit",
+        "Notification",
     ]
 
     /// Path to the Claude Code user settings file.

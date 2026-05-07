@@ -159,8 +159,7 @@ struct ProjectSidebar: View {
                             branchName: branch,
                             worktreePath: workstream.worktreePath,
                             isPathValid: appEnv.isPathValid(workstream.worktreePath),
-                            isActive: activityTracker.isActive(workstream.id),
-                            hasActivePort: appEnv.hasActivePort(workstream.id),
+                            agentState: agentStateTracker.state(for: workstream.id),
                             githubURL: appEnv.githubURL(for: project.directory),
                             taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
                             prTitle: pr?.title,
@@ -486,7 +485,7 @@ struct ProjectSidebar: View {
     @EnvironmentObject private var appEnv: AppEnvironment
     @EnvironmentObject private var updateChecker: UpdateChecker
     @EnvironmentObject private var updater: Updater
-    @EnvironmentObject private var activityTracker: WorkstreamActivityTracker
+    @EnvironmentObject private var agentStateTracker: WorkstreamAgentStateTracker
 
     private func confirmPurge(_ workstream: Workstream) {
         purgeWarningMessage = WorkstreamArchiver.purgeWarning(for: workstream)
@@ -770,8 +769,7 @@ private struct WorkstreamRow: View {
     var branchName: String?
     var worktreePath: String?
     let isPathValid: Bool
-    var isActive: Bool = false
-    var hasActivePort: Bool = false
+    var agentState: WorkstreamAgentStateTracker.AgentRunState = .idle
     var githubURL: URL?
     var taskDescription: String?
     var prTitle: String?
@@ -805,7 +803,7 @@ private struct WorkstreamRow: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            ActivityIndicator(isActive: isActive, isPathValid: isPathValid)
+            AgentStateIndicator(state: agentState, isPathValid: isPathValid)
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 4) {
@@ -814,11 +812,6 @@ private struct WorkstreamRow: View {
                         .strikethrough(!isPathValid)
                         .foregroundStyle(isPathValid ? .primary : .secondary)
                         .lineLimit(1)
-                    if hasActivePort {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 5))
-                            .foregroundStyle(.green)
-                    }
                 }
                 if let subtitle {
                     HStack(spacing: 3) {
@@ -890,38 +883,6 @@ private struct WorkstreamRow: View {
                 Label("Purge", systemImage: "trash")
             }
         }
-    }
-}
-
-private struct ActivityIndicator: View {
-    let isActive: Bool
-    let isPathValid: Bool
-
-    @State private var isPulsing = false
-
-    var body: some View {
-        Group {
-            if !isPathValid {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .font(.system(size: 10))
-            } else if isActive {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 6, height: 6)
-                    .opacity(isPulsing ? 0.4 : 1.0)
-                    .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
-                    .onAppear { isPulsing = true }
-                    .onChange(of: isActive) { _, active in
-                        isPulsing = active
-                    }
-            } else {
-                Circle()
-                    .fill(.tertiary)
-                    .frame(width: 6, height: 6)
-            }
-        }
-        .frame(width: 12)
     }
 }
 

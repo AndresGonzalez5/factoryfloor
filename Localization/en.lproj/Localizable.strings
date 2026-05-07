@@ -296,3 +296,10 @@
 "No GitHub remote found for this project." = "No GitHub remote found for this project.";
 "Quick action debug" = "Quick action debug";
 "Show a debug panel with command output from quick actions (Create PR, Commit & Push)." = "Show a debug panel with command output from quick actions (Create PR, Commit & Push).";
+
+/* Sidebar - Agent state indicator */
+"Agent is working" = "Agent is working";
+"Agent finished — needs review" = "Agent finished — needs review";
+"Agent is awaiting permission" = "Agent is awaiting permission";
+"Agent is idle" = "Agent is idle";
+"Worktree path missing" = "Worktree path missing";

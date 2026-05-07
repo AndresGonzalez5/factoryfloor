@@ -166,9 +166,13 @@ struct FF2App: App {
     init() {
         guard !isRunningXCTest() else { return }
 
-        // Start the hook event receiver and wire it to the router
+        // Start the hook event receiver and wire it to the router and the
+        // sidebar agent-state tracker. `onEvent` is invoked on the main queue.
         HookEventReceiver.shared.onEvent = { projectDir, event in
             HookEventRouter.shared.route(projectDir: projectDir, event: event)
+            MainActor.assumeIsolated {
+                WorkstreamAgentStateTracker.shared.handle(projectDir: projectDir, event: event)
+            }
         }
         HookEventReceiver.shared.start()
 

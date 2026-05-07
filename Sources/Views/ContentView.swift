@@ -88,7 +88,7 @@ struct ContentView: View {
     @StateObject private var pixelAgentsCache = PixelAgentsPanelCache()
     @StateObject private var appEnvironment = AppEnvironment()
     @StateObject private var updateChecker = UpdateChecker()
-    @StateObject private var activityTracker = WorkstreamActivityTracker()
+    @ObservedObject private var agentStateTracker = WorkstreamAgentStateTracker.shared
     @EnvironmentObject private var updater: Updater
     @State private var saveWork: DispatchWorkItem?
     @State private var workstreamToRemove: UUID?
@@ -230,6 +230,7 @@ struct ContentView: View {
                 let work = DispatchWorkItem { ProjectStore.save(newValue) }
                 saveWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+                refreshAgentStateLookup(projects: newValue)
             }
             .alert(
                 "Remove Workstream",
@@ -317,6 +318,12 @@ struct ContentView: View {
                         NotificationCenter.default.post(name: .focusAgent, object: nil)
                     }
                 }
+                let wsID: UUID? = {
+                    if case let .workstream(id) = newValue { return id }
+                    return nil
+                }()
+                agentStateTracker.currentSelection = wsID
+                if let wsID { agentStateTracker.markSeen(workstreamID: wsID) }
             }
             .onKeyPress(.escape) {
                 if selection == .settings || selection == .help {
@@ -358,13 +365,14 @@ struct ContentView: View {
         .environmentObject(appEnvironment)
         .environmentObject(updateChecker)
         .environmentObject(updater)
-        .environmentObject(activityTracker)
+        .environmentObject(agentStateTracker)
         .onAppear {
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)
             appEnvironment.fetchOrigin(projects: projects)
             updateChecker.check()
+            refreshAgentStateLookup(projects: projects)
             // Apply saved appearance
             switch UserDefaults.standard.string(forKey: "factoryfloor.appearance") ?? "system" {
             case "light": NSApp.appearance = NSAppearance(named: .aqua)
@@ -466,6 +474,23 @@ struct ContentView: View {
         }
         .onReceive(Timer.publish(every: 6 * 60 * 60, on: .main, in: .common).autoconnect()) { _ in
             updateChecker.check()
+        }
+    }
+
+    /// Rebuilds the projectDir → workstream-UUID lookup used by the agent
+    /// state tracker. Paths are normalized via `WorkstreamAgentStateTracker.normalize`
+    /// (resolves symlinks) so hook payloads match regardless of how Claude
+    /// reports the path on macOS.
+    private func refreshAgentStateLookup(projects: [Project]) {
+        var index: [String: UUID] = [:]
+        for project in projects {
+            for ws in project.workstreams {
+                guard let path = ws.worktreePath else { continue }
+                index[WorkstreamAgentStateTracker.normalize(path)] = ws.id
+            }
+        }
+        agentStateTracker.workstreamLookup = { projectDir in
+            index[WorkstreamAgentStateTracker.normalize(projectDir)]
         }
     }
 
