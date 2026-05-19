@@ -539,6 +539,41 @@ enum GitOperations {
         return result
     }
 
+    enum PullResult {
+        case success(String)
+        case failure(String)
+    }
+
+    /// Run `git pull --ff-only` on whatever branch is currently checked out at `path`.
+    /// Returns stdout on success and stderr (or an explanatory message) on failure.
+    static func pullCurrentBranch(at path: String) -> PullResult {
+        guard let gitPath else { return .failure("git not found") }
+        let process = Process()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: gitPath)
+        process.arguments = ["pull", "--ff-only"]
+        process.currentDirectoryURL = URL(fileURLWithPath: path)
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            let out = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let err = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if process.terminationStatus == 0 {
+                let msg = out.isEmpty ? err : out
+                return .success(msg)
+            }
+            let reason = err.isEmpty ? "git pull failed (exit \(process.terminationStatus))" : err
+            return .failure(reason)
+        } catch {
+            return .failure("\(error)")
+        }
+    }
+
     // MARK: - Private
 
     /// Fetch the default branch from origin. Fails silently when there is no

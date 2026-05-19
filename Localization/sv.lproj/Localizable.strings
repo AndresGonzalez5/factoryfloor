@@ -307,3 +307,9 @@
 "Agent is awaiting permission" = "Agenten väntar på tillstånd";
 "Agent is idle" = "Agenten är inaktiv";
 "Worktree path missing" = "Worktree-sökväg saknas";
+
+/* Project overview - pull button */
+"Pull" = "Hämta";
+"Fast-forward this branch with the latest changes from origin" = "Snabbspola denna gren med de senaste ändringarna från origin";
+"Pull failed" = "Hämtning misslyckades";
+"Pulling…" = "Hämtar…";

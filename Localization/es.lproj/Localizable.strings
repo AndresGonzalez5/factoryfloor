@@ -307,3 +307,9 @@
 "Agent is awaiting permission" = "El agente espera permiso";
 "Agent is idle" = "El agente está inactivo";
 "Worktree path missing" = "Falta la ruta del worktree";
+
+/* Project overview - pull button */
+"Pull" = "Actualizar";
+"Fast-forward this branch with the latest changes from origin" = "Avanza esta rama con los últimos cambios del origen";
+"Pull failed" = "No se pudo actualizar";
+"Pulling…" = "Actualizando…";

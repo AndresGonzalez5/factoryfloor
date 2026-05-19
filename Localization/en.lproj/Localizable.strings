@@ -307,3 +307,9 @@
 "Agent is awaiting permission" = "Agent is awaiting permission";
 "Agent is idle" = "Agent is idle";
 "Worktree path missing" = "Worktree path missing";
+
+/* Project overview - pull button */
+"Pull" = "Pull";
+"Fast-forward this branch with the latest changes from origin" = "Fast-forward this branch with the latest changes from origin";
+"Pull failed" = "Pull failed";
+"Pulling…" = "Pulling…";

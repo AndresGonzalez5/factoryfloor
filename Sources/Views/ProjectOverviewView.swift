@@ -25,6 +25,9 @@ struct ProjectOverviewView: View {
     @State private var selectedWorktreeForDetail: WorktreeInfo?
     @State private var showRepoChanges = false
     @State private var repoDetail: WorktreeDetail?
+    @State private var isPulling = false
+    @State private var pullErrorMessage: String?
+    @State private var showPullError = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -50,12 +53,41 @@ struct ProjectOverviewView: View {
                     Section("Repository") {
                         if info.isRepo {
                             LabeledContent("Branch") {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.triangle.branch")
-                                        .font(.caption)
-                                    Text(info.branch ?? "unknown")
+                                HStack(spacing: 8) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.triangle.branch")
+                                            .font(.caption)
+                                        Text(info.branch ?? "unknown")
+                                    }
+                                    .foregroundStyle(.secondary)
+
+                                    if info.remoteURL != nil {
+                                        Button {
+                                            pullCurrentBranch()
+                                        } label: {
+                                            if isPulling {
+                                                HStack(spacing: 4) {
+                                                    ProgressView()
+                                                        .controlSize(.small)
+                                                        .scaleEffect(0.7)
+                                                    Text("Pulling…")
+                                                }
+                                            } else {
+                                                Label("Pull", systemImage: "arrow.down.circle")
+                                                    .labelStyle(.titleAndIcon)
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .disabled(isPulling)
+                                        .help("Fast-forward this branch with the latest changes from origin")
+                                    }
                                 }
-                                .foregroundStyle(.secondary)
+                            }
+                            .alert("Pull failed", isPresented: $showPullError, presenting: pullErrorMessage) { _ in
+                                Button("OK", role: .cancel) { }
+                            } message: { msg in
+                                Text(msg)
                             }
 
                             if let count = info.commitCount {
@@ -375,6 +407,24 @@ struct ProjectOverviewView: View {
         Task.detached {
             let result = GitOperations.worktreeDetail(at: dir, mainRepoPath: dir)
             await MainActor.run { repoDetail = result }
+        }
+    }
+
+    private func pullCurrentBranch() {
+        let dir = project.directory
+        isPulling = true
+        Task.detached {
+            let result = GitOperations.pullCurrentBranch(at: dir)
+            await MainActor.run {
+                isPulling = false
+                switch result {
+                case .success:
+                    appEnv.refreshRepoInfo(for: dir)
+                case .failure(let message):
+                    pullErrorMessage = message
+                    showPullError = true
+                }
+            }
         }
     }
 
