@@ -605,8 +605,12 @@ struct ContentView: View {
     private func performPurge() {
         guard let wsID = workstreamToPurge,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
+        let projectID = projects[projectIndex].id
         WorkstreamArchiver.purge(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
         ProjectStore.save(projects)
+        if case let .workstream(id) = selection, id == wsID {
+            selection = .project(projectID)
+        }
         workstreamToPurge = nil
     }
 }
