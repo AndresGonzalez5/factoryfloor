@@ -34,6 +34,10 @@
 "unpushed commits" = "opublicerade commits";
 " and " = " och ";
 "This workstream has %@ that will be lost." = "Detta arbetsflöde har %@ som kommer att gå förlorade.";
+"Purge Worktree" = "Rensa arbetsträd";
+"This worktree has %@ that will be lost." = "Detta arbetsträd har %@ som kommer att gå förlorade.";
+"PR is merged — safe to purge" = "PR är mergad — säkert att rensa";
+"Remove worktree and delete branch" = "Ta bort arbetsträd och radera gren";
 "The worktree and its branch will be permanently deleted." = "Arbetsträdet och dess gren kommer att raderas permanent.";
 "Projects Not Found" = "Projekt hittades inte";
 "The following projects were removed because their directories no longer exist on disk: %@" = "Följande projekt togs bort eftersom deras kataloger inte längre finns på disken: %@";

@@ -16,6 +16,8 @@ struct ProjectOverviewView: View {
     @State private var showingPruneConfirm = false
     @State private var isPruning = false
     @State private var purgingPaths: Set<String> = []
+    @State private var worktreeToPurge: WorktreeInfo?
+    @State private var worktreePurgeWarning: String?
 
     @AppStorage("factoryfloor.defaultTerminal") private var defaultTerminal: String = ""
     @State private var docFiles: [DocFile] = []
@@ -214,7 +216,8 @@ struct ProjectOverviewView: View {
                                 projectDirectory: project.directory,
                                 isWorkstream: workstreamPaths.contains(Self.standardizedPath(wt.path)),
                                 isPurging: purgingPaths.contains(Self.standardizedPath(wt.path)),
-                                onAdopt: { adoptWorktree(wt) }
+                                onAdopt: { adoptWorktree(wt) },
+                                onPurge: { confirmPurgeWorktree(wt) }
                             )
                         }
 
@@ -324,6 +327,27 @@ struct ProjectOverviewView: View {
         } message: {
             Text(String(format: NSLocalizedString(prunableCount == 1 ? "Remove %d clean worktree with no uncommitted changes?" : "Remove %d clean worktrees with no uncommitted changes?", comment: ""), prunableCount))
         }
+        .alert(
+            "Purge Worktree",
+            isPresented: Binding(
+                get: { worktreeToPurge != nil },
+                set: { if !$0 { worktreeToPurge = nil; worktreePurgeWarning = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                worktreeToPurge = nil
+                worktreePurgeWarning = nil
+            }
+            Button(worktreePurgeWarning != nil ? "Purge Anyway" : "Purge", role: .destructive) {
+                performPurgeWorktree()
+            }
+        } message: {
+            if let warning = worktreePurgeWarning {
+                Text(warning)
+            } else {
+                Text("The worktree and its branch will be permanently deleted.")
+            }
+        }
     }
 
     private var workstreamPaths: Set<String> {
@@ -394,6 +418,18 @@ struct ProjectOverviewView: View {
         }
     }
 
+    private func confirmPurgeWorktree(_ worktree: WorktreeInfo) {
+        worktreePurgeWarning = WorkstreamArchiver.orphanPurgeWarning(at: worktree.path)
+        worktreeToPurge = worktree
+    }
+
+    private func performPurgeWorktree() {
+        guard let wt = worktreeToPurge else { return }
+        WorkstreamArchiver.purgeOrphanWorktree(projectDirectory: project.directory, worktreePath: wt.path)
+        worktreeToPurge = nil
+        worktreePurgeWarning = nil
+    }
+
     private func pruneWorktrees() {
         isPruning = true
         let dir = project.directory
@@ -436,6 +472,7 @@ private struct WorktreeInfoRow: View {
     let isWorkstream: Bool
     var isPurging: Bool = false
     let onAdopt: () -> Void
+    var onPurge: (() -> Void)? = nil
 
     @EnvironmentObject var appEnv: AppEnvironment
 
@@ -511,20 +548,40 @@ private struct WorktreeInfoRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if !isWorkstream && !isPurging {
-                Button(action: onAdopt) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.rectangle.on.folder")
-                            .font(.system(size: 12))
-                        Text("Open")
-                            .font(.caption)
+                HStack(spacing: 6) {
+                    Button(action: onAdopt) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus.rectangle.on.folder")
+                                .font(.system(size: 12))
+                            Text("Open")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.primary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .buttonStyle(.plain)
+                    if let onPurge {
+                        let isMerged = pr?.state == "MERGED"
+                        Button(action: onPurge) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 12))
+                                Text("Purge")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(isMerged ? .white : .red)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(isMerged ? Color.red : Color.red.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .buttonStyle(.plain)
+                        .help(isMerged ? "PR is merged — safe to purge" : "Remove worktree and delete branch")
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
     }

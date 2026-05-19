@@ -34,6 +34,10 @@
 "unpushed commits" = "commits sin subir";
 " and " = " y ";
 "This workstream has %@ that will be lost." = "Este flujo de trabajo tiene %@ que se perderán.";
+"Purge Worktree" = "Purgar árbol de trabajo";
+"This worktree has %@ that will be lost." = "Este árbol de trabajo tiene %@ que se perderán.";
+"PR is merged — safe to purge" = "El PR está fusionado — es seguro purgar";
+"Remove worktree and delete branch" = "Eliminar árbol de trabajo y borrar rama";
 "The worktree and its branch will be permanently deleted." = "El árbol de trabajo y su rama se eliminarán permanentemente.";
 "Projects Not Found" = "Proyectos no encontrados";
 "The following projects were removed because their directories no longer exist on disk: %@" = "Los siguientes proyectos se eliminaron porque sus directorios ya no existen en el disco: %@";

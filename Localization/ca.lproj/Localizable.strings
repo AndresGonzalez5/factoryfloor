@@ -34,6 +34,10 @@
 "unpushed commits" = "commits sense pujar";
 " and " = " i ";
 "This workstream has %@ that will be lost." = "Aquest flux de treball té %@ que es perdran.";
+"Purge Worktree" = "Purga l'arbre de treball";
+"This worktree has %@ that will be lost." = "Aquest arbre de treball té %@ que es perdran.";
+"PR is merged — safe to purge" = "El PR està fusionat — es pot purgar amb seguretat";
+"Remove worktree and delete branch" = "Elimina l'arbre de treball i suprimeix la branca";
 "The worktree and its branch will be permanently deleted." = "L'arbre de treball i la seva branca s'eliminaran permanentment.";
 "Projects Not Found" = "Projectes no trobats";
 "The following projects were removed because their directories no longer exist on disk: %@" = "Els projectes següents s'han eliminat perquè els seus directoris ja no existeixen al disc: %@";
