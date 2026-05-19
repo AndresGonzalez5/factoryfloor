@@ -424,6 +424,11 @@ struct ContentView: View {
                     projects[pi].workstreams[wi].worktreePath = worktreePath
                     ProjectStore.save(projects)
                     appEnvironment.refreshPathValidity(projects: projects)
+                    // Project/Workstream equate by id only, so onChange(of: projectList.items)
+                    // doesn't fire when worktreePath flips from nil to a real value. Refresh
+                    // the agent-state lookup explicitly so hook events for this new workstream
+                    // can resolve to its UUID.
+                    refreshAgentStateLookup(projects: projects)
                     logger.warning("[FF] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
                     // Trigger vibe background setup (env copy, symlinks, Claude settings, deps)
                     let projectPath = projects[pi].directory
