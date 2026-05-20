@@ -155,7 +155,7 @@ struct ProjectSidebar: View {
                         let branch = appEnv.branchName(for: workstream.worktreePath)
                         let pr = branch.flatMap { appEnv.githubPR(for: project.directory, branch: $0) }
                         WorkstreamRow(
-                            name: workstream.name,
+                            name: workstream.label,
                             branchName: branch,
                             worktreePath: workstream.worktreePath,
                             isPathValid: appEnv.isPathValid(workstream.worktreePath),
@@ -166,7 +166,8 @@ struct ProjectSidebar: View {
                             prNumber: pr?.number,
                             prState: pr?.state,
                             onRemove: { workstreamToRemove = workstream.id },
-                            onPurge: { confirmPurge(workstream) }
+                            onPurge: { confirmPurge(workstream) },
+                            onRename: { promptRenameWorkstream(workstream) }
                         )
                         .tag(SidebarSelection.workstream(workstream.id))
                         .padding(.leading, 28)
@@ -492,6 +493,43 @@ struct ProjectSidebar: View {
         workstreamToPurge = workstream.id
     }
 
+    private func promptRenameWorkstream(_ workstream: Workstream) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = NSLocalizedString("Rename workstream", comment: "Title of the rename workstream dialog")
+        alert.informativeText = NSLocalizedString(
+            "Leave blank to use the branch name.",
+            comment: "Helper text in the rename workstream dialog"
+        )
+        alert.addButton(withTitle: NSLocalizedString("Rename", comment: "Confirm button in the rename workstream dialog"))
+        alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Cancel button"))
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        textField.stringValue = workstream.label
+        textField.placeholderString = workstream.name
+        alert.accessoryView = textField
+        alert.window.initialFirstResponder = textField
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let trimmed = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let pi = projects.firstIndex(where: { $0.id == workstreamProjectID(for: workstream.id) }),
+              let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstream.id }) else { return }
+        if trimmed.isEmpty || trimmed == projects[pi].workstreams[wi].name {
+            projects[pi].workstreams[wi].displayName = nil
+        } else {
+            projects[pi].workstreams[wi].displayName = trimmed
+        }
+        onProjectsChanged()
+    }
+
+    private func workstreamProjectID(for workstreamID: UUID) -> UUID? {
+        for project in projects where project.workstreams.contains(where: { $0.id == workstreamID }) {
+            return project.id
+        }
+        return nil
+    }
+
     private func performRemove() {
         guard let wsID = workstreamToRemove,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
@@ -777,6 +815,7 @@ private struct WorkstreamRow: View {
     var prState: String?
     let onRemove: () -> Void
     let onPurge: () -> Void
+    let onRename: () -> Void
 
     @State private var isHovering = false
 
@@ -876,6 +915,9 @@ private struct WorkstreamRow: View {
                 }
             }
             Divider()
+            Button(action: onRename) {
+                Label("Rename…", systemImage: "pencil")
+            }
             Button(action: onRemove) {
                 Label("Remove", systemImage: "xmark")
             }

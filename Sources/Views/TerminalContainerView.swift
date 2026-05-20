@@ -260,6 +260,7 @@ struct TerminalContainerView: View {
     let projectDirectory: String
     let projectName: String
     let workstreamName: String
+    let workstreamLabel: String
     let bypassPermissions: Bool
     let isActive: Bool
 
@@ -303,6 +304,7 @@ struct TerminalContainerView: View {
         projectDirectory: String,
         projectName: String,
         workstreamName: String,
+        workstreamLabel: String? = nil,
         bypassPermissions: Bool,
         isActive: Bool,
         scriptConfig: ScriptConfig = .empty,
@@ -313,6 +315,7 @@ struct TerminalContainerView: View {
         self.projectDirectory = projectDirectory
         self.projectName = projectName
         self.workstreamName = workstreamName
+        self.workstreamLabel = workstreamLabel ?? workstreamName
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
         _activeTab = State(initialValue: initialTabState.activeTab)
@@ -577,7 +580,7 @@ struct TerminalContainerView: View {
         case .info:
             WorkstreamInfoView(
                 workstreamID: workstreamID,
-                workstreamName: workstreamName,
+                workstreamName: workstreamLabel,
                 workingDirectory: workingDirectory,
                 projectName: projectName,
                 projectDirectory: projectDirectory,

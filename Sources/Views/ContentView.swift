@@ -152,13 +152,14 @@ struct ContentView: View {
                     projectDirectory: project.directory,
                     projectName: project.name,
                     workstreamName: workstream.name,
+                    workstreamLabel: workstream.label,
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
                     scriptConfig: scriptConfig,
                     initialTabState: initialTabState
                 )
                 .id(workstreamID)
-                .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.name)
+                .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)
                 .navigationSubtitle(workstreamSubtitle(project: project, workstream: workstream))
             } else {
                 VStack(spacing: 12) {
@@ -168,7 +169,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.name)
+                .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)
                 .navigationSubtitle(workstreamSubtitle(project: project, workstream: workstream))
             }
         } else if let project = activeProject,

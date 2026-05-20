@@ -456,7 +456,7 @@ struct ProjectOverviewView: View {
         case .recent:
             return workstreams.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
         case .alphabetical:
-            return workstreams.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         }
     }
 
@@ -663,7 +663,7 @@ private struct WorkstreamRow: View {
     private var headline: String {
         if let prTitle { return prTitle }
         if let taskDescription { return taskDescription }
-        return workstream.name
+        return workstream.label
     }
 
     /// Whether the headline came from a description/PR (true) or is just the generated name (false).
@@ -675,9 +675,9 @@ private struct WorkstreamRow: View {
     private var subtitle: String? {
         guard isPathValid else { return nil }
         if hasRichHeadline {
-            return branchName ?? workstream.name
+            return branchName ?? workstream.label
         }
-        if let branchName, branchName != workstream.name {
+        if let branchName, branchName != workstream.label {
             return branchName
         }
         return nil

@@ -6,16 +6,25 @@ import Foundation
 struct Workstream: Identifiable, Hashable, Codable, Sendable {
     let id: UUID
     var name: String
+    var displayName: String?
     var worktreePath: String?
     var bypassPermissions: Bool
     var lastAccessedAt: Date
 
-    init(name: String, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date()) {
+    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date()) {
         self.id = id
         self.name = name
+        self.displayName = displayName
         self.worktreePath = worktreePath
         self.bypassPermissions = bypassPermissions
         self.lastAccessedAt = lastAccessedAt
+    }
+
+    /// The user-facing label. Falls back to the branch-tracked `name` when no override is set.
+    var label: String {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty { return trimmed }
+        return name
     }
 
     /// The working directory for this workstream's terminals.
