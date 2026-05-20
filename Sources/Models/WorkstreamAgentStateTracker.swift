@@ -85,8 +85,15 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                 states[wsID] = .needsAttention(.permission)
             }
 
-        case .agentToolStart, .agentToolDone, .agentCreated, .agentRemoved:
-            // Intentionally no state change — prevents flicker between tools.
+        case .agentToolStart, .agentToolDone:
+            // Tool activity while we were awaiting permission means the user
+            // already answered the prompt (there's no explicit "granted" hook).
+            // Otherwise no state change — prevents flicker between tools.
+            if case .needsAttention(.permission) = states[wsID] {
+                states[wsID] = .working
+            }
+
+        case .agentCreated, .agentRemoved:
             break
         }
     }
