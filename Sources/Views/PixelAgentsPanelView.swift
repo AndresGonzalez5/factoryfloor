@@ -15,7 +15,7 @@ extension Notification.Name {
 struct PixelAgentsPanelView: View {
     let projectDirectory: String
     @EnvironmentObject private var pixelAgentsCache: PixelAgentsPanelCache
-    @State private var isExpanded = true
+    @AppStorage("factoryfloor.pixelAgentsExpanded") private var isExpanded = true
     @State private var agentCount = 0
     @State private var lastActivity = ""
     @AppStorage("factoryfloor.pixelAgentsPanelHeight") private var panelHeight: Double = 200
