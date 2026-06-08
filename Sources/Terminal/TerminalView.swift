@@ -340,15 +340,29 @@ final class TerminalView: NSView {
         keyTextAccumulator = []
         defer { keyTextAccumulator = nil }
 
+        // Track whether we were already composing before this event so we can
+        // detect when a dead key / IME composition ends.
+        let markedTextBefore = markedText.length > 0
+
         interpretKeyEvents([translationEvent])
 
+        // Sync preedit state with libghostty so it can render the compose
+        // indicator. Only clear a previous preedit if we had one before.
+        syncPreedit(clearIfNeeded: markedTextBefore)
+
         if let textList = keyTextAccumulator, !textList.isEmpty {
+            // Composition resolved — send the composed text as real input.
             for text in textList {
                 _ = sendKeyEvent(action, event: event, text: text)
             }
         } else {
+            // No composed text. Mark as composing if we're in a preedit state
+            // or just exited one (e.g. backspace cancelling a dead key).
             let text = Self.ghosttyCharacters(for: translationEvent)
-            _ = sendKeyEvent(action, event: event, text: text)
+            _ = sendKeyEvent(
+                action, event: event, text: text,
+                composing: markedText.length > 0 || markedTextBefore
+            )
         }
 
         reportActivity()
@@ -371,14 +385,70 @@ final class TerminalView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
-        _ = sendKeyEvent(GHOSTTY_ACTION_PRESS, event: event)
+        let mod: UInt32
+        switch event.keyCode {
+        case 0x39: mod = GHOSTTY_MODS_CAPS.rawValue
+        case 0x38, 0x3C: mod = GHOSTTY_MODS_SHIFT.rawValue
+        case 0x3B, 0x3E: mod = GHOSTTY_MODS_CTRL.rawValue
+        case 0x3A, 0x3D: mod = GHOSTTY_MODS_ALT.rawValue
+        case 0x37, 0x36: mod = GHOSTTY_MODS_SUPER.rawValue
+        default: return
+        }
+
+        // Don't send modifier events during IME composition.
+        if hasMarkedText() { return }
+
+        let mods = Self.eventMods(event)
+
+        // If the modifier bit is active it might be a press — but we
+        // also check the device-specific mask so that releasing one side
+        // of a modifier while the other side is held is correctly
+        // detected as a release.
+        var action = GHOSTTY_ACTION_RELEASE
+        if mods.rawValue & mod != 0 {
+            let sidePressed: Bool
+            switch event.keyCode {
+            case 0x38:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICELSHIFTKEYMASK) != 0
+            case 0x3C:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICERSHIFTKEYMASK) != 0
+            case 0x3B:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICELCTLKEYMASK) != 0
+            case 0x3E:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICERCTLKEYMASK) != 0
+            case 0x3A:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICELALTKEYMASK) != 0
+            case 0x3D:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICERALTKEYMASK) != 0
+            case 0x37:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICELCMDKEYMASK) != 0
+            case 0x36:
+                sidePressed = event.modifierFlags.rawValue
+                    & UInt(NX_DEVICERCMDKEYMASK) != 0
+            default:
+                sidePressed = true
+            }
+            if sidePressed {
+                action = GHOSTTY_ACTION_PRESS
+            }
+        }
+
+        _ = sendKeyEvent(action, event: event)
     }
 
     /// Build and send a ghostty_input_key_s from an NSEvent.
     private func sendKeyEvent(
         _ action: ghostty_input_action_e,
         event: NSEvent,
-        text: String? = nil
+        text: String? = nil,
+        composing: Bool = false
     ) -> Bool {
         guard let surface else { return false }
 
@@ -404,7 +474,7 @@ final class TerminalView: NSView {
         }
 
         keyEv.text = nil
-        keyEv.composing = false
+        keyEv.composing = composing
 
         // For text, only pass it if it's not a control character (>= 0x20).
         // Ghostty's KeyEncoder handles ctrl character mapping internally.
@@ -449,6 +519,9 @@ final class TerminalView: NSView {
         default: return
         }
 
+        // If insertText is called, our preedit must be over.
+        unmarkText()
+
         if var acc = keyTextAccumulator {
             acc.append(chars)
             keyTextAccumulator = acc
@@ -468,10 +541,19 @@ final class TerminalView: NSView {
         case let v as String: markedText = NSMutableAttributedString(string: v)
         default: return
         }
+        // If we're not inside a keyDown, sync immediately. This handles external
+        // preedit updates, e.g. changing keyboard layout while composing.
+        if keyTextAccumulator == nil {
+            syncPreedit()
+        }
     }
 
     func unmarkText() {
+        guard markedText.length > 0 else { return }
         markedText.mutableString.setString("")
+        // Notify libghostty the preedit ended (e.g. app-switch triggering
+        // commitComposition, or a programmatic unmark from an input method).
+        syncPreedit()
     }
 
     func selectedRange() -> NSRange {
@@ -511,6 +593,22 @@ final class TerminalView: NSView {
 
     override func doCommand(by _: Selector) {
         // Let the input system handle commands we don't care about
+    }
+
+    /// Sync the preedit (dead key / IME compose) state with libghostty.
+    private func syncPreedit(clearIfNeeded: Bool = true) {
+        guard let surface else { return }
+        if markedText.length > 0 {
+            let str = markedText.string
+            let len = str.utf8CString.count
+            if len > 0 {
+                str.withCString { ptr in
+                    ghostty_surface_preedit(surface, ptr, UInt(len - 1))
+                }
+            }
+        } else if clearIfNeeded {
+            ghostty_surface_preedit(surface, nil, 0)
+        }
     }
 
     // MARK: - Drag and drop
