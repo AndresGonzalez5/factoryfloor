@@ -23,6 +23,22 @@
 "Recent" = "Zuletzt";
 "A-Z" = "A-Z";
 
+/* Spaces */
+"Spaces" = "Bereiche";
+"Add Space" = "Bereich hinzufügen";
+"New Space" = "Neuer Bereich";
+"Edit Space" = "Bereich bearbeiten";
+"Rename Space" = "Bereich umbenennen";
+"Change Emoji" = "Emoji ändern";
+"Delete Space" = "Bereich löschen";
+"Move to Space" = "In Bereich verschieben";
+"Move projects to…" = "Projekte verschieben nach …";
+"Move Left" = "Nach links";
+"Move Right" = "Nach rechts";
+"Personal" = "Persönlich";
+"Name" = "Name";
+"Emoji" = "Emoji";
+
 /* Alerts */
 "Remove Project" = "Projekt entfernen";
 "Remove Workstream" = "Workstream entfernen";

@@ -23,6 +23,22 @@
 "Recent" = "Recents";
 "A-Z" = "A-Z";
 
+/* Spaces */
+"Spaces" = "Espais";
+"Add Space" = "Afegeix un espai";
+"New Space" = "Espai nou";
+"Edit Space" = "Edita l'espai";
+"Rename Space" = "Reanomena l'espai";
+"Change Emoji" = "Canvia l'emoji";
+"Delete Space" = "Suprimeix l'espai";
+"Move to Space" = "Mou a l'espai";
+"Move projects to…" = "Mou els projectes a…";
+"Move Left" = "Mou a l'esquerra";
+"Move Right" = "Mou a la dreta";
+"Personal" = "Personal";
+"Name" = "Nom";
+"Emoji" = "Emoji";
+
 /* Alerts */
 "Remove Project" = "Elimina projecte";
 "Remove Workstream" = "Elimina flux de treball";

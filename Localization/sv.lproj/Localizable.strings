@@ -23,6 +23,22 @@
 "Recent" = "Senaste";
 "A-Z" = "A-Ö";
 
+/* Spaces */
+"Spaces" = "Utrymmen";
+"Add Space" = "Lägg till utrymme";
+"New Space" = "Nytt utrymme";
+"Edit Space" = "Redigera utrymme";
+"Rename Space" = "Byt namn på utrymme";
+"Change Emoji" = "Byt emoji";
+"Delete Space" = "Ta bort utrymme";
+"Move to Space" = "Flytta till utrymme";
+"Move projects to…" = "Flytta projekt till…";
+"Move Left" = "Flytta vänster";
+"Move Right" = "Flytta höger";
+"Personal" = "Personligt";
+"Name" = "Namn";
+"Emoji" = "Emoji";
+
 /* Alerts */
 "Remove Project" = "Ta bort projekt";
 "Remove Workstream" = "Ta bort arbetsflöde";

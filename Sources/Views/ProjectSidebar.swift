@@ -30,8 +30,11 @@ extension Notification.Name {
 
 struct ProjectSidebar: View {
     @Binding var projects: [Project]
+    @Binding var spaces: [Space]
+    @Binding var currentSpaceID: String
     @Binding var selection: SidebarSelection?
     let onProjectsChanged: () -> Void
+    let onSpacesChanged: () -> Void
 
     @State private var showingAddProjectChoice = false
     @State private var showingNewProjectName = false
@@ -49,14 +52,50 @@ struct ProjectSidebar: View {
     @State private var cachedWorkstreamIndex: [UUID: (Int, Int)] = [:]
     @State private var showWorktreeError = false
     @State private var showNotGitRepoError = false
-    @AppStorage("factoryfloor.sortOrder") private var sortOrder: ProjectSortOrder = .recent
 
     private func recomputeSortedIDs() -> [UUID] {
-        switch sortOrder {
-        case .recent:
-            return projects.sorted { $0.lastAccessedAt > $1.lastAccessedAt }.map(\.id)
-        case .alphabetical:
-            return projects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.map(\.id)
+        guard let space = UUID(uuidString: currentSpaceID) else {
+            // Safety net only: migration (SpacesBootstrap) guarantees currentSpaceID
+            // is a valid space id at launch, so this branch should not be reached.
+            return []
+        }
+        return projects
+            .filter { $0.spaceID == space }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map(\.id)
+    }
+
+    /// After the active space changes, point the detail pane at the new space's
+    /// most recently accessed project, or clear selection when it has none.
+    private func selectLastOpenedProjectInCurrentSpace() {
+        guard let space = UUID(uuidString: currentSpaceID) else { return }
+        // If the current selection already lives in the new space, leave it
+        // alone (covers launch alignment, where currentSpaceID is changed to
+        // match a restored selection without clobbering it).
+        if let selectedProjectID = selectedProjectID(for: selection),
+           projects.first(where: { $0.id == selectedProjectID })?.spaceID == space
+        {
+            return
+        }
+        let lastOpened = projects
+            .filter { $0.spaceID == space }
+            .max { $0.lastAccessedAt < $1.lastAccessedAt }
+        if let lastOpened {
+            selection = .project(lastOpened.id)
+        } else {
+            selection = nil
+        }
+    }
+
+    /// The owning project id for a selection, or nil for settings/help.
+    private func selectedProjectID(for selection: SidebarSelection?) -> UUID? {
+        switch selection {
+        case let .project(id):
+            return id
+        case let .workstream(wsID):
+            return projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })?.id
+        case .settings, .help, .none:
+            return nil
         }
     }
 
@@ -140,7 +179,9 @@ struct ProjectSidebar: View {
                 onAdd: { logger.warning("[FF] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
                 onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
                 onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
-                onDelete: { projectToDelete = project.id }
+                onDelete: { projectToDelete = project.id },
+                spaces: spaces,
+                onMoveToSpace: { spaceID in moveProject(project.id, toSpace: spaceID) }
             )
             .tag(SidebarSelection.project(project.id))
 
@@ -351,15 +392,14 @@ struct ProjectSidebar: View {
                     }
                     .listStyle(.sidebar)
                     .safeAreaInset(edge: .top) {
-                        if projects.count > 1 {
-                            Picker("", selection: $sortOrder) {
-                                ForEach(ProjectSortOrder.allCases, id: \.self) { order in
-                                    Text(order.rawValue).tag(order)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
+                        if !spaces.isEmpty {
+                            SpaceSwitcher(
+                                spaces: $spaces,
+                                currentSpaceID: $currentSpaceID,
+                                projects: $projects,
+                                onChanged: onProjectsChanged,
+                                onSpacesChanged: onSpacesChanged
+                            )
                         }
                     }
                     .onChange(of: selection) { _, sel in
@@ -379,18 +419,25 @@ struct ProjectSidebar: View {
             projects[pi].lastAccessedAt = now
             projects[pi].workstreams[wi].lastAccessedAt = now
             onProjectsChanged()
-            if sortOrder == .recent {
-                cachedSortedIDs = recomputeSortedIDs()
-                cachedSortedWorkstreamIDs[projects[pi].id] = projects[pi].workstreams
-                    .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
-                    .map(\.id)
-            }
+            // Workstreams are ordered by recency, so re-sort this project's
+            // workstreams on activity. Projects themselves are always A–Z.
+            cachedSortedWorkstreamIDs[projects[pi].id] = projects[pi].workstreams
+                .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+                .map(\.id)
         }
         .onAppear {
             cachedSortedIDs = recomputeSortedIDs()
             rebuildIndices()
         }
-        .onChange(of: sortOrder) { _, _ in cachedSortedIDs = recomputeSortedIDs() }
+        .onChange(of: currentSpaceID) { _, _ in
+            cachedSortedIDs = recomputeSortedIDs()
+            // Drive the detail pane to the new space: select its most recently
+            // accessed project, or clear the selection if the space is empty.
+            // One-directional: switcher → currentSpaceID → selection. Selecting a
+            // project must never change currentSpaceID (would loop).
+            selectLastOpenedProjectInCurrentSpace()
+        }
+        .onChange(of: spaces) { _, _ in cachedSortedIDs = recomputeSortedIDs() }
         .onChange(of: expandedProjects) { _, newValue in SidebarState.saveExpanded(newValue) }
         .onChange(of: projects.count) { _, _ in
             cachedSortedIDs = recomputeSortedIDs()
@@ -558,6 +605,14 @@ struct ProjectSidebar: View {
 
     // MARK: - Project management
 
+    private func moveProject(_ projectID: UUID, toSpace spaceID: UUID) {
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        guard projects[index].spaceID != spaceID else { return }
+        projects[index].spaceID = spaceID
+        onProjectsChanged()
+        cachedSortedIDs = recomputeSortedIDs()
+    }
+
     private func deleteProject(id: UUID) {
         if let project = projects.first(where: { $0.id == id }) {
             for ws in project.workstreams {
@@ -701,6 +756,8 @@ private struct ProjectHeaderRow: View {
     let onAddWithPermissions: () -> Void
     let onAddWithoutPermissions: () -> Void
     let onDelete: () -> Void
+    let spaces: [Space]
+    let onMoveToSpace: (UUID) -> Void
 
     @State private var isHovering = false
     @State private var isChevronHovering = false
@@ -790,6 +847,22 @@ private struct ProjectHeaderRow: View {
                     NSWorkspace.shared.open(githubURL)
                 } label: {
                     Label("Open on GitHub", image: "github")
+                }
+            }
+            if !spaces.isEmpty {
+                Divider()
+                Menu("Move to Space") {
+                    ForEach(spaces) { space in
+                        Button {
+                            onMoveToSpace(space.id)
+                        } label: {
+                            if project.spaceID == space.id {
+                                Label("\(space.emoji) \(space.name)", systemImage: "checkmark")
+                            } else {
+                                Text("\(space.emoji) \(space.name)")
+                            }
+                        }
+                    }
                 }
             }
             Divider()

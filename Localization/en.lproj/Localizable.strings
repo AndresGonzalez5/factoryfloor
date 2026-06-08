@@ -23,6 +23,22 @@
 "Recent" = "Recent";
 "A-Z" = "A-Z";
 
+/* Spaces */
+"Spaces" = "Spaces";
+"Add Space" = "Add Space";
+"New Space" = "New Space";
+"Edit Space" = "Edit Space";
+"Rename Space" = "Rename Space";
+"Change Emoji" = "Change Emoji";
+"Delete Space" = "Delete Space";
+"Move to Space" = "Move to Space";
+"Move projects to…" = "Move projects to…";
+"Move Left" = "Move Left";
+"Move Right" = "Move Right";
+"Personal" = "Personal";
+"Name" = "Name";
+"Emoji" = "Emoji";
+
 /* Alerts */
 "Remove Project" = "Remove Project";
 "Remove Workstream" = "Remove Workstream";

@@ -166,6 +166,11 @@ struct FF2App: App {
     init() {
         guard !isRunningXCTest() else { return }
 
+        // Migrate Spaces before any view renders so the sidebar's first paint
+        // already sees a valid current space and migrated project spaceIDs.
+        // Must run before ContentView's @StateObject/@AppStorage load.
+        SpacesBootstrap.migrateIfNeeded()
+
         // Start the hook event receiver and wire it to the router and the
         // sidebar agent-state tracker. `onEvent` is invoked on the main queue.
         HookEventReceiver.shared.onEvent = { projectDir, event in

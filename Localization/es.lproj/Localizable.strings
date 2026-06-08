@@ -23,6 +23,22 @@
 "Recent" = "Recientes";
 "A-Z" = "A-Z";
 
+/* Spaces */
+"Spaces" = "Espacios";
+"Add Space" = "Añadir espacio";
+"New Space" = "Nuevo espacio";
+"Edit Space" = "Editar espacio";
+"Rename Space" = "Renombrar espacio";
+"Change Emoji" = "Cambiar emoji";
+"Delete Space" = "Eliminar espacio";
+"Move to Space" = "Mover a espacio";
+"Move projects to…" = "Mover proyectos a…";
+"Move Left" = "Mover a la izquierda";
+"Move Right" = "Mover a la derecha";
+"Personal" = "Personal";
+"Name" = "Nombre";
+"Emoji" = "Emoji";
+
 /* Alerts */
 "Remove Project" = "Eliminar proyecto";
 "Remove Workstream" = "Eliminar flujo de trabajo";

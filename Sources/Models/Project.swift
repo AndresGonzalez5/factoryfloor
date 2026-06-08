@@ -48,13 +48,15 @@ struct Project: Identifiable, Hashable, Codable, Sendable {
     var directory: String
     var workstreams: [Workstream]
     var lastAccessedAt: Date
+    var spaceID: UUID? = nil
 
-    init(name: String, directory: String, id: UUID = UUID(), workstreams: [Workstream] = [], lastAccessedAt: Date = Date()) {
+    init(name: String, directory: String, id: UUID = UUID(), workstreams: [Workstream] = [], lastAccessedAt: Date = Date(), spaceID: UUID? = nil) {
         self.id = id
         self.name = name
         self.directory = directory
         self.workstreams = workstreams
         self.lastAccessedAt = lastAccessedAt
+        self.spaceID = spaceID
     }
 
     static func == (lhs: Project, rhs: Project) -> Bool {
