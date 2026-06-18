@@ -772,17 +772,16 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertFalse(fp.isEmpty)
     }
 
-    func testDiffFingerprintBranchModeStableThenChangesOnTrackedEdit() throws {
+    func testDiffFingerprintBranchModeStableThenChangesOnTrackedEditAndUntracked() throws {
         // Branch mode: fingerprint is computed from `git diff --stat <merge-base>`
-        // (HEAD SHA + a hash of the stat). It must be stable across calls when
-        // nothing changes, and shift when a tracked file is edited.
+        // PLUS the untracked-file list (HEAD SHA + a hash of both). It must be
+        // stable across calls when nothing changes, and shift when a tracked
+        // file is edited OR an untracked file is added.
         //
-        // NOTE: branch-mode fingerprint intentionally tracks `git diff --stat`
-        // only — it does NOT incorporate untracked files (unlike uncommitted
-        // mode, which appends `ls-files --others`). A newly-added untracked file
-        // therefore does not move the branch-mode fingerprint; that is the
-        // implementation's documented behavior and is asserted by NOT expecting
-        // a change here.
+        // Branch mode folds in `ls-files --others --exclude-standard` exactly
+        // like uncommitted mode, so a newly-added untracked file moves the
+        // fingerprint — keeping the refresh-on-tab-appear short-circuit in sync
+        // with the diff listing, which unions untracked files in (Hardening 1).
         let projectDir = tempDir.appendingPathComponent("fp-branch-proj")
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
         git(["init", "-b", "main"], in: projectDir)
@@ -802,6 +801,12 @@ final class GitOperationsTests: XCTestCase {
         try "let b = 99\n".write(to: wt.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
         let fpEdited = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
         XCTAssertNotEqual(fp1, fpEdited, "branch-mode fingerprint must change after a tracked-file edit")
+
+        // Add an untracked file — branch mode folds in `ls-files --others`, so
+        // the fingerprint must move even though `git diff --stat` is unchanged.
+        try "let c = 3\n".write(to: wt.appendingPathComponent("c.swift"), atomically: true, encoding: .utf8)
+        let fpUntracked = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        XCTAssertNotEqual(fpEdited, fpUntracked, "branch-mode fingerprint must change when an untracked file is added")
     }
 
     // MARK: - Helpers

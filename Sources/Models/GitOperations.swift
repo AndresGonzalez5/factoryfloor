@@ -248,22 +248,26 @@ enum GitOperations {
     // MARK: - Diff fingerprint (cache invalidation)
 
     /// Fast (~10ms) cache key for the Changes view: HEAD SHA plus a hash of
-    /// `git diff --stat` (and the untracked-file list in uncommitted mode).
-    /// Reads no file contents. Tolerates an unborn/empty HEAD and non-repo
-    /// paths by returning a stable (non-empty) string rather than crashing.
+    /// `git diff --stat` and the untracked-file list (both modes). Reads no file
+    /// contents. Tolerates an unborn/empty HEAD and non-repo paths by returning a
+    /// stable (non-empty) string rather than crashing.
+    ///
+    /// Both modes fold in `ls-files --others --exclude-standard` so that adding
+    /// or removing an untracked file moves the fingerprint — matching the diff
+    /// listing, which unions untracked files in for both modes (Hardening 1).
     static func diffFingerprint(worktreePath: String, projectPath: String, mode: String) -> String {
         let head = run(args: ["rev-parse", "HEAD"], in: worktreePath)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        let stat: String
+        let tracked: String
         if mode == "branch" {
             let base = mergeBase(worktreePath: worktreePath, projectPath: projectPath) ?? "HEAD"
-            stat = run(args: ["diff", "--stat", base], in: worktreePath) ?? ""
+            tracked = run(args: ["diff", "--stat", base], in: worktreePath) ?? ""
         } else {
-            let tracked = run(args: ["diff", "--stat", "HEAD"], in: worktreePath) ?? ""
-            let untracked = run(args: ["ls-files", "--others", "--exclude-standard"], in: worktreePath) ?? ""
-            stat = tracked + untracked
+            tracked = run(args: ["diff", "--stat", "HEAD"], in: worktreePath) ?? ""
         }
+        let untracked = run(args: ["ls-files", "--others", "--exclude-standard"], in: worktreePath) ?? ""
+        let stat = tracked + untracked
 
         // Not cryptographic — just enough to detect changes between tab visits.
         return "\(head)|\(stat.count)|\(stat.hashValue)"
