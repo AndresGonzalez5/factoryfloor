@@ -255,6 +255,7 @@
 /* Tab labels */
 "Info" = "Info";
 "Agent" = "Agent";
+"Changes" = "Changes";
 
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "New workstream (full permissions)";

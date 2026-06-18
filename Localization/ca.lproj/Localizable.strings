@@ -255,6 +255,7 @@
 /* Tab labels */
 "Info" = "Informació";
 "Agent" = "Agent";
+"Changes" = "Canvis";
 
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "Nou flux de treball (permisos complets)";

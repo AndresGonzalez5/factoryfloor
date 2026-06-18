@@ -349,6 +349,40 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktreeB.path))
     }
 
+    // MARK: - uncommittedDiffFiles (Changes tab tracer)
+
+    func testUncommittedDiffFilesListsModifiedTrackedFile() throws {
+        let repoDir = tempDir.appendingPathComponent("changes-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        let file = repoDir.appendingPathComponent("a.swift")
+        try "let original = 1\n".write(to: file, atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+
+        // Modify the tracked file without committing.
+        try "let modified = 2\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        XCTAssertGreaterThanOrEqual(files.count, 1)
+        XCTAssertTrue(files.contains { $0.relativePath == "a.swift" && $0.status == .modified })
+    }
+
+    func testFileContentReturnsCommittedContentForRef() throws {
+        let repoDir = tempDir.appendingPathComponent("content-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        let file = repoDir.appendingPathComponent("a.swift")
+        try "let original = 1\n".write(to: file, atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+
+        let content = GitOperations.fileContent(at: repoDir.path, ref: "HEAD", filePath: "a.swift")
+        XCTAssertEqual(content, "let original = 1\n")
+    }
+
     // MARK: - Helpers
 
     @discardableResult

@@ -69,6 +69,22 @@ struct WorktreeDetail {
     let unmergedCommits: [UnmergedCommit]
 }
 
+/// A single file that differs in a diff listing for the Changes tab.
+/// Phase 0 carries only the minimal fields the tracer needs; size/binary
+/// flags arrive in Phase 1.
+struct DiffFile: Equatable {
+    enum Status: String {
+        case added = "A"
+        case modified = "M"
+        case deleted = "D"
+        case renamed = "R"
+    }
+
+    /// Path relative to the worktree root. For renames, the new path.
+    let relativePath: String
+    let status: Status
+}
+
 enum GitOperations {
     private static var gitPath: String? {
         CommandLineTools.path(for: "git")
@@ -144,6 +160,53 @@ enum GitOperations {
             }
         }
         return "HEAD"
+    }
+
+    // MARK: - Changes tab diff listing (Phase 0 — minimal)
+
+    /// List files that differ between HEAD and the working tree (Uncommitted mode).
+    /// Phase 0: tracked changes only (no untracked union, no binary/size flags —
+    /// those arrive in Phase 1). Returns an empty array on any git failure.
+    static func uncommittedDiffFiles(at path: String) -> [DiffFile] {
+        guard let output = run(
+            args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", "HEAD"],
+            in: path
+        ) else {
+            return []
+        }
+        return parseNameStatus(output)
+    }
+
+    /// Parse `git diff --name-status` output into DiffFiles.
+    /// Each line is `<STATUS>\t<path>` or, for renames, `R###\t<old>\t<new>`.
+    private static func parseNameStatus(_ output: String) -> [DiffFile] {
+        var files: [DiffFile] = []
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let fields = rawLine.split(separator: "\t", omittingEmptySubsequences: true)
+            guard let statusField = fields.first else { continue }
+            let statusChar = statusField.prefix(1)
+            switch statusChar {
+            case "A":
+                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .added)) }
+            case "M":
+                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .modified)) }
+            case "D":
+                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .deleted)) }
+            case "R":
+                // Rename: use the new path (last field).
+                if fields.count >= 3 { files.append(DiffFile(relativePath: String(fields[2]), status: .renamed)) }
+            default:
+                continue
+            }
+        }
+        return files
+    }
+
+    /// Return the content of a file at a given git ref via `git show <ref>:<path>`.
+    /// Returns nil if the file does not exist at that ref or git fails.
+    /// Phase 0 reads only small files; the >64 KB pipe-deadlock fix lands in Phase 1.
+    static func fileContent(at path: String, ref: String, filePath: String) -> String? {
+        run(args: ["show", "\(ref):\(filePath)"], in: path)
     }
 
     /// Create a git worktree for a workstream, branching off the default branch.

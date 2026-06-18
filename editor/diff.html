@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    #diffs {
+      width: 100%;
+      height: 100%;
+      overflow-y: auto;
+    }
+    body.loading #diffs {
+      opacity: 0;
+    }
+
+    .diff-section {
+      border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+    }
+    .diff-header {
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      color: light-dark(rgba(0, 0, 0, 0.7), rgba(255, 255, 255, 0.7));
+      background: light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.04));
+    }
+    .diff-body {
+      width: 100%;
+      height: 360px;
+    }
+
+    /* macOS-style overlay scrollbars */
+    .monaco-scrollable-element > .scrollbar {
+      background: transparent !important;
+      transition: opacity 0.8s ease-out !important;
+    }
+    .monaco-scrollable-element > .scrollbar > .slider {
+      background: light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.2)) !important;
+      border-radius: 4px !important;
+      transition: background 0.2s ease !important;
+    }
+    .monaco-scrollable-element > .scrollbar > .slider:hover {
+      background: light-dark(rgba(0, 0, 0, 0.4), rgba(255, 255, 255, 0.35)) !important;
+    }
+    .monaco-scrollable-element > .scrollbar > .slider.active {
+      background: light-dark(rgba(0, 0, 0, 0.55), rgba(255, 255, 255, 0.5)) !important;
+    }
+  </style>
+</head>
+<body class="loading">
+  <div id="diffs"></div>
+  <script type="module" src="./src/diff.js"></script>
+</body>
+</html>
