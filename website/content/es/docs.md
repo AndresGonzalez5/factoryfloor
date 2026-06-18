@@ -159,6 +159,7 @@ Factory Floor prioriza el teclado. Aquí está todo.
 |----------|--------|
 | ⌘1 | Info |
 | ⌘2 | Coding Agent |
+| ⌘D | Cambios |
 | ⌘3-9 | Cambiar tab |
 | ⌘Shift+[ | Tab anterior |
 | ⌘Shift+] | Tab siguiente |

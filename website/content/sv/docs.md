@@ -159,6 +159,7 @@ Factory Floor är tangentbord-först. Här är allt.
 |----------|--------|
 | ⌘1 | Info |
 | ⌘2 | Coding Agent |
+| ⌘D | Ändringar |
 | ⌘3-9 | Byt tab |
 | ⌘Shift+[ | Föregående tab |
 | ⌘Shift+] | Nästa tab |

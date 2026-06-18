@@ -165,6 +165,7 @@ Factory Floor is keyboard-first. Here's everything.
 |----------|--------|
 | ⌘1 | Info |
 | ⌘2 | Coding Agent |
+| ⌘D | Changes |
 | ⌘3-9 | Switch tab |
 | ⌘Shift+[ | Previous tab |
 | ⌘Shift+] | Next tab |

@@ -159,6 +159,7 @@ Factory Floor ist tastaturorientiert. Hier ist alles.
 |----------|--------|
 | ⌘1 | Info |
 | ⌘2 | Coding Agent |
+| ⌘D | Änderungen |
 | ⌘3-9 | Tab wechseln |
 | ⌘Shift+[ | Vorheriger Tab |
 | ⌘Shift+] | Nächster Tab |
