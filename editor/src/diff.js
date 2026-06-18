@@ -127,11 +127,12 @@ await import('@codingame/monaco-vscode-standalone-css-language-features')
 await import('@codingame/monaco-vscode-standalone-html-language-features')
 
 // --- Diff API ---
-// Renders a vertical stack of inline diff editors, one per file.
-// Each editor is sized to its content height so the page (not the editor)
-// scrolls and there is no trailing empty editor background below the content.
+// Renders a vertical stack of inline diff editors, one per file. Each editor is
+// sized to its content height so the page (not the editor) scrolls and there is
+// no trailing empty editor background below the content. Binary files render a
+// "not shown" badge; oversize files render a click-to-load placeholder.
 const container = document.getElementById('diffs')
-const diffEditors = []
+const emptyState = document.getElementById('empty-state')
 
 // Line height in pixels — must match Monaco's lineHeight (~19px at fontSize 13).
 const LINE_HEIGHT = 19
@@ -140,6 +141,19 @@ const MIN_EDITOR_HEIGHT = 60
 const PADDING_LINES = 2
 // Padding added to the measured content height when sizing the container.
 const HEIGHT_PADDING = 8
+
+// Localized strings injected by Swift (fall back to English if absent).
+const STR = {
+  binary: 'Binary file (not shown)',
+  largeFile: 'Large file — %d changes, click to load'
+}
+
+// Active diff editors keyed by file path: { host, editor, original, modified }.
+const sections = new Map()
+// Editors awaiting their first onDidUpdateDiff before we report contentReady.
+let pendingCount = 0
+let reported = false
+let safetyTimer = null
 
 const sharedDiffOptions = {
   automaticLayout: true,
@@ -163,6 +177,15 @@ const sharedDiffOptions = {
   }
 }
 
+const STATUS_CLASS = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed' }
+
+function reportContentReady() {
+  if (reported) return
+  reported = true
+  if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null }
+  postToSwift({ type: 'contentReady' })
+}
+
 // Estimate an initial container height from the line count so the editor has a
 // sensible size before its diff is computed (avoids a 0px flash).
 function calculateEditorHeight(originalText, modifiedText) {
@@ -183,30 +206,104 @@ function resizeDiffEditor(diffEditor, host) {
   diffEditor.layout()
 }
 
+function disposeSection(entry) {
+  if (entry.editor) entry.editor.dispose()
+  if (entry.original) entry.original.dispose()
+  if (entry.modified) entry.modified.dispose()
+}
+
 function clearDiffs() {
-  for (const ed of diffEditors) ed.dispose()
-  diffEditors.length = 0
-  container.replaceChildren()
+  for (const entry of sections.values()) disposeSection(entry)
+  sections.clear()
+  // Remove every child except the empty-state placeholder.
+  for (const child of Array.from(container.children)) {
+    if (child !== emptyState) child.remove()
+  }
+}
+
+function makeHeader(file) {
+  const header = document.createElement('div')
+  header.className = 'diff-header'
+
+  const badge = document.createElement('span')
+  badge.className = `status-badge ${STATUS_CLASS[file.status] || 'modified'}`
+  badge.textContent = file.status || 'M'
+  header.appendChild(badge)
+
+  const path = document.createElement('span')
+  path.className = 'file-path'
+  path.textContent = file.filePath
+  header.appendChild(path)
+
+  return header
+}
+
+// Build a real Monaco diff editor into `host` for the given file content.
+function mountDiffEditor(host, file) {
+  const original = monaco.editor.createModel(file.originalText ?? '', file.languageId || 'plaintext')
+  const modified = monaco.editor.createModel(file.modifiedText ?? '', file.languageId || 'plaintext')
+
+  const diffEditor = monaco.editor.createDiffEditor(host, sharedDiffOptions)
+  diffEditor.setModel({ original, modified })
+
+  return { editor: diffEditor, original, modified }
 }
 
 window.diffAPI = {
   setFiles(files) {
+    reported = false
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null }
     clearDiffs()
 
     if (!files || files.length === 0) {
-      // Empty state is owned by Swift in Phase 0; leave the area blank.
-      postToSwift({ type: 'contentReady' })
+      emptyState.classList.add('visible')
+      reportContentReady()
       return
     }
+    emptyState.classList.remove('visible')
+
+    // Count only the files that will actually compute a diff (normal files).
+    pendingCount = files.filter(f => !f.binary && !f.deferred).length
+
+    // Safety: report ready after 5s even if some onDidUpdateDiff never fires.
+    safetyTimer = setTimeout(reportContentReady, 5000)
 
     for (const file of files) {
       const section = document.createElement('div')
       section.className = 'diff-section'
+      section.appendChild(makeHeader(file))
 
-      const header = document.createElement('div')
-      header.className = 'diff-header'
-      header.textContent = file.filePath
-      section.appendChild(header)
+      if (file.binary) {
+        const note = document.createElement('div')
+        note.className = 'placeholder placeholder-binary'
+        note.textContent = STR.binary
+        section.appendChild(note)
+        container.appendChild(section)
+        sections.set(file.filePath, { host: section, editor: null })
+        continue
+      }
+
+      if (file.deferred) {
+        const note = document.createElement('div')
+        note.className = 'placeholder placeholder-large'
+        note.textContent = STR.largeFile.replace('%d', file.changedLines ?? 0)
+        note.setAttribute('role', 'button')
+        note.tabIndex = 0
+        const request = () => {
+          if (note.dataset.loading === '1') return
+          note.dataset.loading = '1'
+          note.classList.add('loading')
+          postToSwift({ type: 'loadFile', filePath: file.filePath })
+        }
+        note.addEventListener('click', request)
+        note.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); request() }
+        })
+        section.appendChild(note)
+        container.appendChild(section)
+        sections.set(file.filePath, { host: section, editor: null })
+        continue
+      }
 
       const host = document.createElement('div')
       host.className = 'diff-body'
@@ -215,22 +312,54 @@ window.diffAPI = {
       section.appendChild(host)
       container.appendChild(section)
 
-      const original = monaco.editor.createModel(file.originalText ?? '', file.languageId || 'plaintext')
-      const modified = monaco.editor.createModel(file.modifiedText ?? '', file.languageId || 'plaintext')
-
-      const diffEditor = monaco.editor.createDiffEditor(host, sharedDiffOptions)
-      diffEditor.setModel({ original, modified })
+      const mounted = mountDiffEditor(host, file)
+      mounted.host = section
 
       // Once the diff is computed (and unchanged regions folded), size the
       // container to the exact content height so no empty editor area remains.
-      diffEditor.onDidUpdateDiff(() => {
-        resizeDiffEditor(diffEditor, host)
+      mounted.editor.onDidUpdateDiff(() => {
+        resizeDiffEditor(mounted.editor, host)
+        pendingCount--
+        if (pendingCount <= 0) reportContentReady()
       })
 
-      diffEditors.push(diffEditor)
+      sections.set(file.filePath, mounted)
     }
 
-    postToSwift({ type: 'contentReady' })
+    // No normal editors to wait on (all binary/deferred/empty) — ready now.
+    if (pendingCount <= 0) reportContentReady()
+  },
+
+  // Replace a deferred file's placeholder with a real diff editor in place.
+  loadFileContent(file) {
+    const entry = sections.get(file.filePath)
+    if (!entry || !entry.host) return
+    const section = entry.host
+
+    // Remove the placeholder note (keep the header).
+    const placeholder = section.querySelector('.placeholder')
+    if (placeholder) placeholder.remove()
+
+    const host = document.createElement('div')
+    host.className = 'diff-body'
+    host.style.height = `${calculateEditorHeight(file.originalText, file.modifiedText)}px`
+    section.appendChild(host)
+
+    const mounted = mountDiffEditor(host, file)
+    mounted.host = section
+    mounted.editor.onDidUpdateDiff(() => {
+      resizeDiffEditor(mounted.editor, host)
+    })
+    sections.set(file.filePath, mounted)
+  },
+
+  setStrings(strings) {
+    if (!strings || typeof strings !== 'object') return
+    Object.assign(STR, strings)
+    if (strings.noChanges) {
+      const msg = emptyState && emptyState.querySelector('.message')
+      if (msg) msg.textContent = strings.noChanges
+    }
   },
 
   setTheme(isDark) {
@@ -240,10 +369,14 @@ window.diffAPI = {
 
   clear() {
     clearDiffs()
+    emptyState.classList.add('visible')
+    reportContentReady()
   },
 
   layout() {
-    for (const ed of diffEditors) ed.layout()
+    for (const entry of sections.values()) {
+      if (entry.editor) entry.editor.layout()
+    }
   }
 }
 

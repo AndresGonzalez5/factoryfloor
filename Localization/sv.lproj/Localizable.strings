@@ -257,6 +257,15 @@
 "Agent" = "Agent";
 "Changes" = "Ändringar";
 
+/* Changes tab */
+"Uncommitted" = "Osparade";
+"No changes" = "Inga ändringar";
+"Refreshing…" = "Uppdaterar…";
+"%d file(s) changed" = "%d fil(er) ändrade";
+"Refresh changes" = "Uppdatera ändringar";
+"Binary file (not shown)" = "Binärfil (visas inte)";
+"Large file — %d changes, click to load" = "Stor fil — %d ändringar, klicka för att läsa in";
+
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "Nytt arbetsflöde (fulla behörigheter)";
 "New workstream (with prompts)" = "Nytt arbetsflöde (med bekräftelse)";

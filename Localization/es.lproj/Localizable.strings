@@ -257,6 +257,15 @@
 "Agent" = "Agente";
 "Changes" = "Cambios";
 
+/* Changes tab */
+"Uncommitted" = "Sin confirmar";
+"No changes" = "Sin cambios";
+"Refreshing…" = "Actualizando…";
+"%d file(s) changed" = "%d archivo(s) cambiado(s)";
+"Refresh changes" = "Actualizar cambios";
+"Binary file (not shown)" = "Archivo binario (no mostrado)";
+"Large file — %d changes, click to load" = "Archivo grande — %d cambios, haz clic para cargar";
+
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "Nuevo flujo de trabajo (permisos completos)";
 "New workstream (with prompts)" = "Nuevo flujo de trabajo (con confirmación)";

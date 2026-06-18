@@ -16,6 +16,30 @@ final class MonacoDiffBridge: ObservableObject {
     private(set) var isReady = false
     private var pendingOps: [() -> Void] = []
     private var coordinator: Coordinator?
+    private var appearanceObserver: NSKeyValueObservation?
+
+    /// Fired when diff.js reports all editors have finished rendering ("contentReady").
+    /// ChangesView uses this to drop its loading / refreshing indicator.
+    var onContentReady: (() -> Void)?
+
+    /// Resolves the (original, modified, languageId) content for a single deferred
+    /// file when its placeholder is clicked. Invoked off the main thread.
+    /// ChangesView installs this so the bridge has the current workDir + base ref.
+    var onLoadFile: ((_ filePath: String) -> (original: String, modified: String, languageId: String))?
+
+    /// Git fingerprint from the last successful setFiles() call. ChangesView uses
+    /// it to skip reloading when nothing in git has changed between tab visits.
+    var lastFingerprint: String?
+
+    /// The mode ("branch"/"uncommitted") that was active for the last load.
+    var lastMode: String?
+
+    /// Number of files from the last setFiles() call. Stored here (not @State) so
+    /// it survives the SwiftUI view being re-created on a tab switch.
+    var lastFileCount = 0
+
+    /// Whether setFiles() has run at least once (cached content lives in the WebView).
+    private(set) var hasContent = false
 
     // MARK: - WebView lifecycle
 
@@ -57,12 +81,46 @@ final class MonacoDiffBridge: ObservableObject {
     // MARK: - Diff API
 
     /// Render the given files as a stack of Monaco diff editors.
-    /// Each dict carries: filePath, status, languageId, originalText, modifiedText.
+    /// Each dict carries: filePath, status, languageId, originalText, modifiedText,
+    /// and optionally binary/deferred/changedLines for the placeholder cases.
     func setFiles(_ files: [[String: Any]]) {
+        hasContent = true
         enqueue {
             guard let webView = self.webView else { return }
             guard let json = Self.jsonString(from: files) else { return }
             webView.evaluateJavaScript("window.diffAPI.setFiles(\(json))")
+        }
+    }
+
+    /// Inject the loaded content for a previously-deferred file, replacing its
+    /// placeholder with a real diff editor in place (no full re-render).
+    func loadFileContent(filePath: String, originalText: String, modifiedText: String, languageId: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            let payload: [String: Any] = [
+                "filePath": filePath,
+                "originalText": originalText,
+                "modifiedText": modifiedText,
+                "languageId": languageId,
+            ]
+            guard let json = Self.jsonString(from: payload) else { return }
+            webView.evaluateJavaScript("window.diffAPI.loadFileContent(\(json))")
+        }
+    }
+
+    /// Clear all diffs.
+    func clear() {
+        enqueue {
+            guard let webView = self.webView else { return }
+            webView.evaluateJavaScript("window.diffAPI.clear()")
+        }
+    }
+
+    /// Switch the Monaco color theme to match the host appearance.
+    func setTheme(isDark: Bool) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            webView.evaluateJavaScript("window.diffAPI.setTheme(\(isDark))")
         }
     }
 
@@ -78,10 +136,70 @@ final class MonacoDiffBridge: ObservableObject {
 
     fileprivate func markReady() {
         isReady = true
+        injectLocalizedStrings()
+        syncThemeWithAppearance()
+        startAppearanceObservation()
         for op in pendingOps {
             op()
         }
         pendingOps.removeAll()
+    }
+
+    /// Hand the localized placeholder/empty-state strings to diff.js so the
+    /// "Binary file (not shown)" and "Large file — %d changes…" labels are
+    /// localized rather than the English fallbacks baked into the bundle.
+    private func injectLocalizedStrings() {
+        guard let webView else { return }
+        let strings: [String: String] = [
+            "binary": NSLocalizedString("Binary file (not shown)", comment: "Changes tab: binary file placeholder"),
+            "largeFile": NSLocalizedString(
+                "Large file — %d changes, click to load",
+                comment: "Changes tab: large-file click-to-load placeholder"
+            ),
+            "noChanges": NSLocalizedString("No changes", comment: "Changes tab: empty state"),
+        ]
+        guard let json = Self.jsonString(from: strings) else { return }
+        webView.evaluateJavaScript("window.diffAPI.setStrings(\(json))")
+    }
+
+    fileprivate func contentReady() {
+        onContentReady?()
+    }
+
+    /// Resolve content for a deferred file off the main thread, then inject it.
+    fileprivate func handleLoadFile(_ filePath: String) {
+        guard let resolver = onLoadFile else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (original, modified, languageId) = resolver(filePath)
+            DispatchQueue.main.async {
+                self.loadFileContent(
+                    filePath: filePath,
+                    originalText: original,
+                    modifiedText: modified,
+                    languageId: languageId
+                )
+            }
+        }
+    }
+
+    // MARK: - Theme
+
+    private func syncThemeWithAppearance() {
+        let isDark = NSApp?.effectiveAppearance.isDark ?? true
+        guard let webView else { return }
+        webView.evaluateJavaScript("window.diffAPI.setTheme(\(isDark))")
+    }
+
+    private func startAppearanceObservation() {
+        guard appearanceObserver == nil else { return }
+        appearanceObserver = NSApplication.shared.observe(
+            \.effectiveAppearance,
+            options: [.new]
+        ) { [weak self] _, _ in
+            Task { @MainActor in
+                self?.syncThemeWithAppearance()
+            }
+        }
     }
 
     // MARK: - Private
@@ -126,6 +244,12 @@ final class MonacoDiffBridge: ObservableObject {
                 switch type {
                 case "ready":
                     self.bridge.markReady()
+                case "contentReady":
+                    self.bridge.contentReady()
+                case "loadFile":
+                    if let filePath = body["filePath"] as? String {
+                        self.bridge.handleLoadFile(filePath)
+                    }
                 case "error":
                     if let msg = body["message"] as? String {
                         print("[MonacoDiff] JS error: \(msg)")

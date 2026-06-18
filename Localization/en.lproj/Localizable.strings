@@ -257,6 +257,15 @@
 "Agent" = "Agent";
 "Changes" = "Changes";
 
+/* Changes tab */
+"Uncommitted" = "Uncommitted";
+"No changes" = "No changes";
+"Refreshing…" = "Refreshing…";
+"%d file(s) changed" = "%d file(s) changed";
+"Refresh changes" = "Refresh changes";
+"Binary file (not shown)" = "Binary file (not shown)";
+"Large file — %d changes, click to load" = "Large file — %d changes, click to load";
+
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "New workstream (full permissions)";
 "New workstream (with prompts)" = "New workstream (with prompts)";
