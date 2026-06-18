@@ -119,6 +119,55 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(branch.contains("origin"), "Expected origin-prefixed branch, got: \(branch)")
     }
 
+    func testDefaultBranchPrefersLocalDevelopmentOverMain() throws {
+        // development beats main/master in the precedence order.
+        let repoDir = tempDir.appendingPathComponent("dev-over-main")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        git(["branch", "development"], in: repoDir)
+
+        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        XCTAssertEqual(branch, "development", "local development must win over local main")
+    }
+
+    func testDefaultBranchPrefersOriginDevelopmentOverEverything() throws {
+        // origin/development is the highest-priority ref of all.
+        let remoteDir = tempDir.appendingPathComponent("remote-dev")
+        try FileManager.default.createDirectory(at: remoteDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: remoteDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: remoteDir)
+        git(["branch", "development"], in: remoteDir)
+
+        let repoDir = tempDir.appendingPathComponent("cloned-dev")
+        git(["clone", remoteDir.path, repoDir.path], in: tempDir)
+
+        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        XCTAssertEqual(branch, "origin/development",
+                       "origin/development must take precedence over every other ref")
+    }
+
+    func testDefaultBranchUsesOriginHEADWhenNoDevelopment() throws {
+        // No development branch anywhere → resolve via origin/HEAD symbolic-ref,
+        // which a clone sets to the remote's default branch (here: master).
+        let remoteDir = tempDir.appendingPathComponent("remote-head")
+        try FileManager.default.createDirectory(at: remoteDir, withIntermediateDirectories: true)
+        git(["init", "-b", "master"], in: remoteDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: remoteDir)
+
+        let repoDir = tempDir.appendingPathComponent("cloned-head")
+        git(["clone", remoteDir.path, repoDir.path], in: tempDir)
+        // Ensure origin/HEAD points at the remote default branch.
+        git(["remote", "set-head", "origin", "--auto"], in: repoDir)
+
+        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        XCTAssertEqual(branch, "origin/master",
+                       "with no development branch, origin/HEAD must resolve the default, got: \(branch)")
+    }
+
     // MARK: - fetchDefaultBranch
 
     func testFetchDefaultBranchDoesNotCrashWithoutRemote() throws {
@@ -721,6 +770,38 @@ final class GitOperationsTests: XCTestCase {
         // Must not crash; returns some stable string.
         let fp = GitOperations.diffFingerprint(worktreePath: plainDir.path, projectPath: plainDir.path, mode: "branch")
         XCTAssertFalse(fp.isEmpty)
+    }
+
+    func testDiffFingerprintBranchModeStableThenChangesOnTrackedEdit() throws {
+        // Branch mode: fingerprint is computed from `git diff --stat <merge-base>`
+        // (HEAD SHA + a hash of the stat). It must be stable across calls when
+        // nothing changes, and shift when a tracked file is edited.
+        //
+        // NOTE: branch-mode fingerprint intentionally tracks `git diff --stat`
+        // only — it does NOT incorporate untracked files (unlike uncommitted
+        // mode, which appends `ls-files --others`). A newly-added untracked file
+        // therefore does not move the branch-mode fingerprint; that is the
+        // implementation's documented behavior and is asserted by NOT expecting
+        // a change here.
+        let projectDir = tempDir.appendingPathComponent("fp-branch-proj")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: projectDir)
+        try "let b = 0\n".write(to: projectDir.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: projectDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "base"], in: projectDir)
+
+        let wt = tempDir.appendingPathComponent("fp-branch-wt")
+        git(["worktree", "add", "-b", "feature-fp", wt.path], in: projectDir)
+
+        let fp1 = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        let fp2 = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        XCTAssertEqual(fp1, fp2, "branch-mode fingerprint must be stable when nothing changes")
+
+        // Edit a tracked file — this moves `git diff --stat`, so the fingerprint changes.
+        try "let b = 99\n".write(to: wt.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
+        let fpEdited = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        XCTAssertNotEqual(fp1, fpEdited, "branch-mode fingerprint must change after a tracked-file edit")
     }
 
     // MARK: - Helpers
