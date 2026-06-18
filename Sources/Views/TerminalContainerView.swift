@@ -27,14 +27,15 @@ enum RestorableWorkspaceTab: String, Codable {
     case info
     case agent
     case environment
+    case changes
 
     init(activeTab: WorkspaceTab) {
         switch activeTab {
         case .agent:
             self = .agent
-        case .info, .changes, .terminal, .browser, .editor:
-            // .changes is not persisted (Phase 3 adds a dedicated raw value);
-            // restoring from Changes falls back to Info.
+        case .changes:
+            self = .changes
+        case .info, .terminal, .browser, .editor:
             self = .info
         }
     }
@@ -45,6 +46,8 @@ enum RestorableWorkspaceTab: String, Codable {
             return .info
         case .agent:
             return .agent
+        case .changes:
+            return .changes
         }
     }
 }
@@ -179,8 +182,6 @@ struct WorkspaceTabSnapshot {
 func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
     if let snapshot {
         // Filter out any persisted environment tabs from before the merge.
-        // (Phase 3 adds the idempotent insert-after-.agent migration; Phase 0
-        // only keeps an in-session .changes tab alive and seeds new defaults.)
         let filteredTabs = snapshot.tabs.filter { tab in
             if case .info = tab { return true }
             if case .agent = tab { return true }
@@ -191,6 +192,14 @@ func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: Restora
         }
         var cleaned = snapshot
         cleaned.tabs = filteredTabs
+        // Migrate older snapshots that predate the fixed Changes tab: insert it
+        // immediately after Agent (or at a sensible fixed index if Agent is
+        // absent). Idempotent — never inserts when .changes is already present.
+        if !cleaned.tabs.contains(.changes) {
+            let insertIndex = cleaned.tabs.firstIndex(of: .agent).map { $0 + 1 }
+                ?? min(2, cleaned.tabs.count)
+            cleaned.tabs.insert(.changes, at: insertIndex)
+        }
         if !cleaned.tabs.contains(cleaned.activeTab) {
             cleaned.activeTab = .info
         }
