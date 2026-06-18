@@ -70,8 +70,11 @@ struct WorktreeDetail {
 }
 
 /// A single file that differs in a diff listing for the Changes tab.
-/// Phase 0 carries only the minimal fields the tracer needs; size/binary
-/// flags arrive in Phase 1.
+///
+/// Consumed by Phase 2's payload builder, which uses `isBinary` to emit a
+/// "binary file" placeholder and `changedLines`/`sizeHint` to apply the
+/// per-file large-file guard (defer rendering files over a threshold) before
+/// reading any content.
 struct DiffFile: Equatable {
     enum Status: String {
         case added = "A"
@@ -83,6 +86,20 @@ struct DiffFile: Equatable {
     /// Path relative to the worktree root. For renames, the new path.
     let relativePath: String
     let status: Status
+
+    /// True when git reports the file as binary (numstat "-"/"-") or, for
+    /// untracked files, when a NUL byte is found in the first chunk on disk.
+    /// Binary files get a placeholder instead of a UTF-8 diff body (Hardening 2).
+    var isBinary: Bool = false
+
+    /// added + deleted line counts from `git diff --numstat`. For untracked
+    /// files (absent from numstat) this is the file's own line count. Used by
+    /// the large-file guard (Hardening 3).
+    var changedLines: Int = 0
+
+    /// Byte size of the modified-side file on disk (0 for deleted/missing).
+    /// A second input to the large-file guard (Hardening 3).
+    var sizeHint: Int = 0
 }
 
 enum GitOperations {
@@ -162,11 +179,37 @@ enum GitOperations {
         return "HEAD"
     }
 
-    // MARK: - Changes tab diff listing (Phase 0 — minimal)
+    // MARK: - Changes tab diff listing
 
-    /// List files that differ between HEAD and the working tree (Uncommitted mode).
-    /// Phase 0: tracked changes only (no untracked union, no binary/size flags —
-    /// those arrive in Phase 1). Returns an empty array on any git failure.
+    /// Largest prefix of a file we sniff for a NUL byte when deciding whether an
+    /// untracked file is binary (numstat does not cover untracked files).
+    private static let binarySniffBytes = 8 * 1024
+
+    /// List files changed between `merge-base(defaultBranch, HEAD)` and the
+    /// working tree (Branch mode), unioning untracked files in as `.added`
+    /// (Hardening 1). Each file carries `isBinary`/`changedLines`/`sizeHint`.
+    /// Returns an empty array on any git failure or non-repo path.
+    static func branchDiffFiles(worktreePath: String, projectPath: String) -> [DiffFile] {
+        guard let base = mergeBase(worktreePath: worktreePath, projectPath: projectPath) else {
+            return []
+        }
+        guard let output = run(
+            args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", base],
+            in: worktreePath
+        ) else {
+            return []
+        }
+        var files = parseNameStatus(output)
+        appendUntrackedFiles(into: &files, at: worktreePath)
+
+        let stats = numstat(args: ["diff", "--numstat", "-M", base], in: worktreePath)
+        annotate(&files, with: stats, at: worktreePath)
+        return files.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    /// List files that differ between HEAD and the working tree (Uncommitted
+    /// mode), unioning untracked files in as `.added` (Hardening 1). Each file
+    /// carries `isBinary`/`changedLines`/`sizeHint`. Empty on git failure.
     static func uncommittedDiffFiles(at path: String) -> [DiffFile] {
         guard let output = run(
             args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", "HEAD"],
@@ -174,8 +217,59 @@ enum GitOperations {
         ) else {
             return []
         }
-        return parseNameStatus(output)
+        var files = parseNameStatus(output)
+        appendUntrackedFiles(into: &files, at: path)
+
+        let stats = numstat(args: ["diff", "--numstat", "-M", "HEAD"], in: path)
+        annotate(&files, with: stats, at: path)
+        return files.sorted { $0.relativePath < $1.relativePath }
     }
+
+    /// Return the content of a file at a given git ref via `git show <ref>:<path>`.
+    /// Returns nil if the file does not exist at that ref or git fails.
+    /// `run()` drains stdout before waiting, so large files do not deadlock.
+    static func fileContent(at path: String, ref: String, filePath: String) -> String? {
+        run(args: ["show", "\(ref):\(filePath)"], in: path)
+    }
+
+    /// The merge-base commit of the default branch and HEAD, trimmed. nil when
+    /// merge-base cannot be computed (e.g. non-repo, unborn HEAD, git failure).
+    static func mergeBase(worktreePath: String, projectPath: String) -> String? {
+        let base = defaultBranch(at: projectPath)
+        guard let sha = run(args: ["merge-base", base, "HEAD"], in: worktreePath)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !sha.isEmpty
+        else {
+            return nil
+        }
+        return sha
+    }
+
+    // MARK: - Diff fingerprint (cache invalidation)
+
+    /// Fast (~10ms) cache key for the Changes view: HEAD SHA plus a hash of
+    /// `git diff --stat` (and the untracked-file list in uncommitted mode).
+    /// Reads no file contents. Tolerates an unborn/empty HEAD and non-repo
+    /// paths by returning a stable (non-empty) string rather than crashing.
+    static func diffFingerprint(worktreePath: String, projectPath: String, mode: String) -> String {
+        let head = run(args: ["rev-parse", "HEAD"], in: worktreePath)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        let stat: String
+        if mode == "branch" {
+            let base = mergeBase(worktreePath: worktreePath, projectPath: projectPath) ?? "HEAD"
+            stat = run(args: ["diff", "--stat", base], in: worktreePath) ?? ""
+        } else {
+            let tracked = run(args: ["diff", "--stat", "HEAD"], in: worktreePath) ?? ""
+            let untracked = run(args: ["ls-files", "--others", "--exclude-standard"], in: worktreePath) ?? ""
+            stat = tracked + untracked
+        }
+
+        // Not cryptographic — just enough to detect changes between tab visits.
+        return "\(head)|\(stat.count)|\(stat.hashValue)"
+    }
+
+    // MARK: - Diff listing helpers
 
     /// Parse `git diff --name-status` output into DiffFiles.
     /// Each line is `<STATUS>\t<path>` or, for renames, `R###\t<old>\t<new>`.
@@ -202,11 +296,89 @@ enum GitOperations {
         return files
     }
 
-    /// Return the content of a file at a given git ref via `git show <ref>:<path>`.
-    /// Returns nil if the file does not exist at that ref or git fails.
-    /// Phase 0 reads only small files; the >64 KB pipe-deadlock fix lands in Phase 1.
-    static func fileContent(at path: String, ref: String, filePath: String) -> String? {
-        run(args: ["show", "\(ref):\(filePath)"], in: path)
+    /// Union untracked files (`git ls-files --others --exclude-standard`) into
+    /// the list as `.added`, skipping any path already present (Hardening 1).
+    private static func appendUntrackedFiles(into files: inout [DiffFile], at path: String) {
+        guard let output = run(args: ["ls-files", "--others", "--exclude-standard"], in: path) else {
+            return
+        }
+        let existing = Set(files.map { $0.relativePath })
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let filePath = String(rawLine)
+            guard !filePath.isEmpty, !existing.contains(filePath) else { continue }
+            files.append(DiffFile(relativePath: filePath, status: .added))
+        }
+    }
+
+    /// Parse `git diff --numstat <ref>` into `[path: (added, deleted)]`.
+    /// Binary files print `-\t-\t<path>`, mapped to `(nil, nil)`.
+    private static func numstat(args: [String], in path: String) -> [String: (added: Int?, deleted: Int?)] {
+        guard let output = run(args: args, in: path) else { return [:] }
+        var result: [String: (added: Int?, deleted: Int?)] = [:]
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let fields = rawLine.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count >= 3 else { continue }
+            let added = fields[0] == "-" ? nil : Int(fields[0])
+            let deleted = fields[1] == "-" ? nil : Int(fields[1])
+            // For renames numstat prints `<add>\t<del>\t<old>\t<new>` or a
+            // brace-compacted path; the final field is the (new) path.
+            let filePath = String(fields[fields.count - 1])
+            result[filePath] = (added, deleted)
+        }
+        return result
+    }
+
+    /// Populate `isBinary`, `changedLines`, and `sizeHint` for each file using
+    /// the numstat map. Tracked binaries come from numstat `-`/`-`; untracked
+    /// files (absent from numstat) fall back to a NUL-byte sniff plus a line
+    /// count. `sizeHint` is the on-disk byte size of the modified side.
+    private static func annotate(
+        _ files: inout [DiffFile],
+        with stats: [String: (added: Int?, deleted: Int?)],
+        at path: String
+    ) {
+        for index in files.indices {
+            let file = files[index]
+            let fullPath = (path as NSString).appendingPathComponent(file.relativePath)
+
+            // sizeHint: byte size of the modified side (0 for deleted/missing).
+            if file.status != .deleted {
+                let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath)
+                files[index].sizeHint = (attrs?[.size] as? Int) ?? 0
+            }
+
+            if let entry = stats[file.relativePath] {
+                if entry.added == nil, entry.deleted == nil {
+                    files[index].isBinary = true
+                } else {
+                    files[index].changedLines = (entry.added ?? 0) + (entry.deleted ?? 0)
+                }
+            } else {
+                // Not in numstat (typically an untracked file): sniff + count.
+                if file.status != .deleted {
+                    files[index].isBinary = fileLooksBinary(atPath: fullPath)
+                    if !files[index].isBinary {
+                        files[index].changedLines = lineCount(atPath: fullPath)
+                    }
+                }
+            }
+        }
+    }
+
+    /// True if the first `binarySniffBytes` of the file contain a NUL byte.
+    private static func fileLooksBinary(atPath path: String) -> Bool {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        let chunk = handle.readData(ofLength: binarySniffBytes)
+        return chunk.contains(0)
+    }
+
+    /// Number of newline-terminated lines in a file (best-effort, 0 on failure).
+    private static func lineCount(atPath path: String) -> Int {
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
+        if content.isEmpty { return 0 }
+        return content.split(separator: "\n", omittingEmptySubsequences: false).count
+            - (content.hasSuffix("\n") ? 1 : 0)
     }
 
     /// Create a git worktree for a workstream, branching off the default branch.
@@ -717,14 +889,19 @@ enum GitOperations {
         process.standardError = errPipe
         do {
             try process.run()
-            process.waitUntilExit()
+            // Drain stdout AND stderr to end BEFORE waitUntilExit() to avoid a
+            // deadlock when git output exceeds the ~64 KB macOS pipe buffer
+            // (e.g. `git show`/`git diff` on large files): the child blocks on a
+            // full pipe while we'd be blocked waiting for it to exit. The reads
+            // block only until the child closes each fd, which it does on exit.
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let errStr = String(data: errData, encoding: .utf8) ?? ""
+            process.waitUntilExit()
             guard process.terminationStatus == 0 else {
+                let errStr = String(data: errData, encoding: .utf8) ?? ""
                 logger.warning("[FF] git \(args.joined(separator: " "), privacy: .public) failed (exit \(process.terminationStatus, privacy: .public)): \(errStr, privacy: .public)")
                 return nil
             }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             return String(data: data, encoding: .utf8)
         } catch {
             logger.warning("[FF] git \(args.joined(separator: " "), privacy: .public) threw: \(error, privacy: .public)")

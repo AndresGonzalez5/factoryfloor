@@ -155,7 +155,8 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
             savedTab: .agent
         )
 
-        XCTAssertEqual(state.tabs, [.info, .agent])
+        // The default tab set now includes the fixed Changes tab after Agent.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
         XCTAssertEqual(state.activeTab, .agent)
     }
 
