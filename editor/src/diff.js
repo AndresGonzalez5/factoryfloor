@@ -128,8 +128,18 @@ await import('@codingame/monaco-vscode-standalone-html-language-features')
 
 // --- Diff API ---
 // Renders a vertical stack of inline diff editors, one per file.
+// Each editor is sized to its content height so the page (not the editor)
+// scrolls and there is no trailing empty editor background below the content.
 const container = document.getElementById('diffs')
 const diffEditors = []
+
+// Line height in pixels — must match Monaco's lineHeight (~19px at fontSize 13).
+const LINE_HEIGHT = 19
+const MIN_EDITOR_HEIGHT = 60
+// Extra lines added to the initial estimate to cover diff decorations/widgets.
+const PADDING_LINES = 2
+// Padding added to the measured content height when sizing the container.
+const HEIGHT_PADDING = 8
 
 const sharedDiffOptions = {
   automaticLayout: true,
@@ -141,11 +151,36 @@ const sharedDiffOptions = {
   scrollBeyondLastLine: false,
   overviewRulerLanes: 0,
   hideUnchangedRegions: { enabled: true },
+  // The page scrolls, not the editor: hide the editor's own vertical scrollbar
+  // and let wheel events bubble so the container can be sized to content.
   scrollbar: {
-    verticalScrollbarSize: 8,
+    vertical: 'hidden',
+    horizontal: 'auto',
+    verticalScrollbarSize: 0,
     horizontalScrollbarSize: 8,
-    alwaysConsumeMouseWheel: false
+    alwaysConsumeMouseWheel: false,
+    handleMouseWheel: false
   }
+}
+
+// Estimate an initial container height from the line count so the editor has a
+// sensible size before its diff is computed (avoids a 0px flash).
+function calculateEditorHeight(originalText, modifiedText) {
+  const origLines = originalText ? originalText.split('\n').length : 0
+  const modLines = modifiedText ? modifiedText.split('\n').length : 0
+  const lines = Math.max(origLines, modLines) + PADDING_LINES
+  return Math.max(lines * LINE_HEIGHT, MIN_EDITOR_HEIGHT)
+}
+
+// Resize a diff editor's container to fit its actual content height. This is
+// what makes each editor shrink/grow to exactly its content (accounting for
+// hideUnchangedRegions folding) so the stacked page has no trailing gray gap.
+function resizeDiffEditor(diffEditor, host) {
+  const modifiedEditor = diffEditor.getModifiedEditor()
+  const contentHeight = modifiedEditor.getContentHeight()
+  const newHeight = Math.max(contentHeight + HEIGHT_PADDING, MIN_EDITOR_HEIGHT)
+  host.style.height = `${newHeight}px`
+  diffEditor.layout()
 }
 
 function clearDiffs() {
@@ -175,6 +210,8 @@ window.diffAPI = {
 
       const host = document.createElement('div')
       host.className = 'diff-body'
+      // Initial estimate; refined to exact content height in onDidUpdateDiff.
+      host.style.height = `${calculateEditorHeight(file.originalText, file.modifiedText)}px`
       section.appendChild(host)
       container.appendChild(section)
 
@@ -183,6 +220,13 @@ window.diffAPI = {
 
       const diffEditor = monaco.editor.createDiffEditor(host, sharedDiffOptions)
       diffEditor.setModel({ original, modified })
+
+      // Once the diff is computed (and unchanged regions folded), size the
+      // container to the exact content height so no empty editor area remains.
+      diffEditor.onDidUpdateDiff(() => {
+        resizeDiffEditor(diffEditor, host)
+      })
+
       diffEditors.push(diffEditor)
     }
 
