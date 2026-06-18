@@ -159,6 +159,7 @@ Factory Floor prioritza el teclat. Aquí tens tot.
 |----------|--------|
 | ⌘1 | Info |
 | ⌘2 | Coding Agent |
+| ⌘D | Canvis |
 | ⌘3-9 | Canvia de tab |
 | ⌘Shift+[ | Tab anterior |
 | ⌘Shift+] | Tab següent |

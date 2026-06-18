@@ -255,6 +255,24 @@
 /* Tab labels */
 "Info" = "Información";
 "Agent" = "Agente";
+"Changes" = "Cambios";
+
+/* Changes tab */
+"Uncommitted" = "Sin confirmar";
+"No changes" = "Sin cambios";
+"Refreshing…" = "Actualizando…";
+"%d file(s) changed" = "%d archivo(s) cambiado(s)";
+"Refresh changes" = "Actualizar cambios";
+"Binary file (not shown)" = "Archivo binario (no mostrado)";
+"Large file — %d changes, click to load" = "Archivo grande — %d cambios, haz clic para cargar";
+
+/* Changes sidebar - Files changed tree */
+"Files changed" = "Archivos cambiados";
+"Added" = "Añadido";
+"Modified" = "Modificado";
+"Deleted" = "Eliminado";
+"Renamed" = "Renombrado";
+"Binary file" = "Archivo binario";
 
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "Nuevo flujo de trabajo (permisos completos)";

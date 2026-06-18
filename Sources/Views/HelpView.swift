@@ -88,6 +88,7 @@ struct HelpView: View {
                     Section {
                         ShortcutRow(keys: "1", description: "Info")
                         ShortcutRow(keys: "2", description: "Coding Agent")
+                        ShortcutRow(keys: "D", description: "Changes")
                         ShortcutRow(keys: "3-9", description: "Switch tab")
                         ShortcutRow(keys: "[", shift: true, description: "Previous tab")
                         ShortcutRow(keys: "]", shift: true, description: "Next tab")

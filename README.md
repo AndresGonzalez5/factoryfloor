@@ -125,6 +125,7 @@ Every workstream terminal has access to:
 |---|---|
 | `Cmd+1` | Info |
 | `Cmd+2` | Coding Agent |
+| `Cmd+D` | Changes |
 | `Cmd+3-9` | Switch tab |
 | `Cmd+Shift+[` / `]` | Cycle tabs |
 | `Cmd+Return` | Focus Coding Agent |

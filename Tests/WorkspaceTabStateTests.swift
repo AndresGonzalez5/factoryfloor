@@ -144,7 +144,9 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
             savedTab: nil
         )
 
-        XCTAssertEqual(state.tabs, [.info, .agent])
+        // Migration inserts the fixed Changes tab after Agent; run state and the
+        // active tab selection are preserved.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
         XCTAssertEqual(state.activeTab, .agent)
         XCTAssertTrue(state.runStarted)
     }
@@ -155,8 +157,121 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
             savedTab: .agent
         )
 
-        XCTAssertEqual(state.tabs, [.info, .agent])
+        // The default tab set now includes the fixed Changes tab after Agent.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
         XCTAssertEqual(state.activeTab, .agent)
+    }
+
+    func testStartupStateMigrationInsertsChangesAfterAgent() {
+        // A snapshot persisted before the Changes tab existed.
+        let terminalID = UUID()
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.info, .agent, .terminal(terminalID)],
+            terminalCount: 1,
+            browserCount: 0,
+            editorCount: 0,
+            activeTab: .agent,
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+
+        let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
+
+        // .changes inserted immediately after .agent; other tabs and order preserved.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .terminal(terminalID)])
+    }
+
+    func testStartupStateMigrationIsIdempotent() {
+        // A snapshot that already contains .changes must be left unchanged (no duplicate).
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.info, .agent, .changes],
+            terminalCount: 0,
+            browserCount: 0,
+            editorCount: 0,
+            activeTab: .changes,
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+
+        let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
+
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
+        XCTAssertEqual(state.tabs.filter { $0 == .changes }.count, 1)
+    }
+
+    func testStartupStateMigrationPreservesActiveTab() {
+        // A saved active terminal tab must stay active across migration.
+        let terminalID = UUID()
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.info, .agent, .terminal(terminalID)],
+            terminalCount: 1,
+            browserCount: 0,
+            editorCount: 0,
+            activeTab: .terminal(terminalID),
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+
+        let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
+
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .terminal(terminalID)])
+        XCTAssertEqual(state.activeTab, .terminal(terminalID))
+    }
+
+    func testStartupStateMigrationInsertsChangesWhenAgentMissing() {
+        // Defensive: if .agent is somehow absent, .changes still gets inserted (idempotently)
+        // at a sensible fixed index without crashing.
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.info],
+            terminalCount: 0,
+            browserCount: 0,
+            editorCount: 0,
+            activeTab: .info,
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+
+        let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
+
+        XCTAssertTrue(state.tabs.contains(.changes))
+        XCTAssertEqual(state.tabs.filter { $0 == .changes }.count, 1)
+        XCTAssertEqual(state.activeTab, .info)
+    }
+
+    func testStartupStateMigrationStillFiltersEnvironmentTabs() {
+        // The pre-merge environment-tab filtering must remain: a persisted snapshot
+        // that contained an editor tab (not restorable) is dropped, and .changes is added.
+        let editorID = UUID()
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.info, .agent, .editor(editorID)],
+            terminalCount: 0,
+            browserCount: 0,
+            editorCount: 1,
+            activeTab: .editor(editorID),
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+
+        let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
+
+        // Editor tab filtered out; .changes inserted after .agent; active falls back to .info.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
+        XCTAssertEqual(state.activeTab, .info)
     }
 
     func testWorkspaceEnvironmentUsesSuppliedDefaultBranch() throws {
@@ -216,6 +331,15 @@ final class WorkspaceTabStateTests: XCTestCase {
 
     func testEnvironmentRestoresToInfo() {
         XCTAssertEqual(RestorableWorkspaceTab.environment.workspaceTab(), .info)
+    }
+
+    func testChangesTabRoundTrips() {
+        // init(activeTab:) maps .changes -> .changes, persists with its own raw value,
+        // and workspaceTab() maps back to .changes.
+        let restorable = RestorableWorkspaceTab(activeTab: .changes)
+        XCTAssertEqual(restorable, .changes)
+        XCTAssertEqual(restorable.rawValue, "changes")
+        XCTAssertEqual(restorable.workspaceTab(), .changes)
     }
 
     func testReorderedCustomTabsKeepsFixedTabsInPlace() throws {

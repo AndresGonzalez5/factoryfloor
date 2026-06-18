@@ -15,6 +15,7 @@ SOURCE_FILES=(
   "$EDITOR_DIR/bun.lock"
   "$EDITOR_DIR/vite.config.js"
   "$EDITOR_DIR/index.html"
+  "$EDITOR_DIR/diff.html"
 )
 
 needs_rebuild() {

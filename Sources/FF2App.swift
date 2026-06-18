@@ -355,6 +355,11 @@ struct FF2App: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
+                Button("Changes") {
+                    NotificationCenter.default.post(name: .toggleChanges, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+
                 Button("Toggle Pixel Agents") {
                     NotificationCenter.default.post(name: .togglePixelAgents, object: nil)
                 }

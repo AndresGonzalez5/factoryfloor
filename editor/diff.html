@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
+      /* Consistent editor-matching background so any space below the last
+         file (in a short scroll view) reads as intentional, not a gray gap. */
+      background: var(--vscode-editor-background, light-dark(#ffffff, #1e1e1e));
+    }
+    #diffs {
+      width: 100%;
+      /* Grow with content; each .diff-body is sized to its content by JS. */
+      min-height: 100%;
+      padding-bottom: 32px;
+    }
+    body.loading #diffs {
+      opacity: 0;
+    }
+
+    /* Empty state ("No changes") — shown when there are no files to diff. */
+    #empty-state {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      gap: 12px;
+      color: light-dark(rgba(0, 0, 0, 0.35), rgba(255, 255, 255, 0.35));
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    #empty-state.visible {
+      display: flex;
+    }
+    #empty-state .icon {
+      font-size: 36px;
+      opacity: 0.5;
+    }
+    #empty-state .message {
+      font-size: 13px;
+    }
+
+    .diff-section {
+      border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+    }
+    .diff-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      color: light-dark(rgba(0, 0, 0, 0.7), rgba(255, 255, 255, 0.7));
+      background: light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.04));
+    }
+    .diff-header .file-path {
+      flex: 1;
+      font-family: Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status-badge {
+      font-size: 10px;
+      font-weight: 700;
+      font-family: Menlo, monospace;
+      padding: 1px 5px;
+      border-radius: 4px;
+      flex: 0 0 auto;
+    }
+    .status-badge.added {
+      color: #3fb950;
+      background: rgba(63, 185, 80, 0.15);
+    }
+    .status-badge.modified {
+      color: #d29922;
+      background: rgba(210, 153, 34, 0.15);
+    }
+    .status-badge.deleted {
+      color: #f85149;
+      background: rgba(248, 81, 73, 0.15);
+    }
+    .status-badge.renamed {
+      color: #58a6ff;
+      background: rgba(88, 166, 255, 0.15);
+    }
+
+    .diff-body {
+      width: 100%;
+      /* Height is set dynamically by diff.js to fit the content. */
+    }
+
+    /* Binary + large-file placeholders shown instead of a Monaco editor. */
+    .placeholder {
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 12px;
+      padding: 14px 16px;
+      color: light-dark(rgba(0, 0, 0, 0.5), rgba(255, 255, 255, 0.45));
+    }
+    .placeholder-binary {
+      font-style: italic;
+    }
+    .placeholder-large {
+      cursor: pointer;
+      color: light-dark(#0a66c2, #58a6ff);
+      user-select: none;
+    }
+    .placeholder-large:hover {
+      background: light-dark(rgba(88, 166, 255, 0.08), rgba(88, 166, 255, 0.1));
+    }
+    .placeholder-large.loading {
+      cursor: progress;
+      opacity: 0.6;
+    }
+
+    /* macOS-style overlay scrollbars */
+    .monaco-scrollable-element > .scrollbar {
+      background: transparent !important;
+      transition: opacity 0.8s ease-out !important;
+    }
+    .monaco-scrollable-element > .scrollbar > .slider {
+      background: light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.2)) !important;
+      border-radius: 4px !important;
+      transition: background 0.2s ease !important;
+    }
+    .monaco-scrollable-element > .scrollbar > .slider:hover {
+      background: light-dark(rgba(0, 0, 0, 0.4), rgba(255, 255, 255, 0.35)) !important;
+    }
+    .monaco-scrollable-element > .scrollbar > .slider.active {
+      background: light-dark(rgba(0, 0, 0, 0.55), rgba(255, 255, 255, 0.5)) !important;
+    }
+  </style>
+</head>
+<body class="loading">
+  <div id="diffs">
+    <div id="empty-state">
+      <div class="icon">&#x2714;</div>
+      <div class="message">No changes</div>
+    </div>
+  </div>
+  <script type="module" src="./src/diff.js"></script>
+</body>
+</html>
