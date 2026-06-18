@@ -725,6 +725,62 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertGreaterThan(entry?.sizeHint ?? 0, 0, "sizeHint should reflect on-disk byte size")
     }
 
+    // MARK: - separate added/deleted counts from numstat
+
+    func testAddedAndDeletedCountsReflectNumstat() throws {
+        let repoDir = tempDir.appendingPathComponent("add-del")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "line1\nline2\nline3\nline4\n".write(to: repoDir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+        // Replace line2/line3 (2 deletions) and append two new lines (2 additions).
+        try "line1\nchanged2\nchanged3\nline4\nline5\nline6\n".write(
+            to: repoDir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8
+        )
+
+        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let entry = files.first { $0.relativePath == "a.txt" }
+        XCTAssertNotNil(entry)
+        // git numstat: replacing 2 lines = 2 add + 2 del; appending 2 lines = 2 add.
+        XCTAssertEqual(entry?.added, 4, "added lines from numstat")
+        XCTAssertEqual(entry?.deleted, 2, "deleted lines from numstat")
+        XCTAssertEqual(entry?.changedLines, 6, "changedLines = added + deleted")
+    }
+
+    func testUntrackedFileAddedEqualsLineCountDeletedZero() throws {
+        let repoDir = tempDir.appendingPathComponent("untracked-add-del")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        try "a\nb\nc\n".write(to: repoDir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let entry = files.first { $0.relativePath == "new.txt" }
+        XCTAssertNotNil(entry)
+        XCTAssertEqual(entry?.added, 3, "untracked added = file line count")
+        XCTAssertEqual(entry?.deleted, 0, "untracked deleted = 0")
+    }
+
+    func testDeletedFileHasDeletionsNoAdditions() throws {
+        let repoDir = tempDir.appendingPathComponent("deleted-counts")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "x\ny\n".write(to: repoDir.appendingPathComponent("gone.txt"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+        try FileManager.default.removeItem(at: repoDir.appendingPathComponent("gone.txt"))
+
+        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let entry = files.first { $0.relativePath == "gone.txt" }
+        XCTAssertNotNil(entry)
+        XCTAssertEqual(entry?.added, 0, "deleted file has no additions")
+        XCTAssertEqual(entry?.deleted, 2, "deleted file deletions = original line count")
+    }
+
     // MARK: - diffFingerprint
 
     func testDiffFingerprintStableWhenNothingChanges() throws {

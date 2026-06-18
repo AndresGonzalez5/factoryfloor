@@ -97,6 +97,16 @@ struct DiffFile: Equatable {
     /// the large-file guard (Hardening 3).
     var changedLines: Int = 0
 
+    /// Added lines from `git diff --numstat` (first column). For untracked
+    /// files this is the file's own line count. 0 for binary files. Surfaced
+    /// to the Changes sidebar as the GitHub-style `+a` count.
+    var added: Int = 0
+
+    /// Deleted lines from `git diff --numstat` (second column). For untracked
+    /// files this is 0. 0 for binary files. Surfaced to the Changes sidebar as
+    /// the GitHub-style `−d` count.
+    var deleted: Int = 0
+
     /// Byte size of the modified-side file on disk (0 for deleted/missing).
     /// A second input to the large-file guard (Hardening 3).
     var sizeHint: Int = 0
@@ -355,14 +365,21 @@ enum GitOperations {
                 if entry.added == nil, entry.deleted == nil {
                     files[index].isBinary = true
                 } else {
-                    files[index].changedLines = (entry.added ?? 0) + (entry.deleted ?? 0)
+                    let add = entry.added ?? 0
+                    let del = entry.deleted ?? 0
+                    files[index].added = add
+                    files[index].deleted = del
+                    files[index].changedLines = add + del
                 }
             } else {
                 // Not in numstat (typically an untracked file): sniff + count.
                 if file.status != .deleted {
                     files[index].isBinary = fileLooksBinary(atPath: fullPath)
                     if !files[index].isBinary {
-                        files[index].changedLines = lineCount(atPath: fullPath)
+                        let lines = lineCount(atPath: fullPath)
+                        files[index].added = lines
+                        files[index].deleted = 0
+                        files[index].changedLines = lines
                     }
                 }
             }
