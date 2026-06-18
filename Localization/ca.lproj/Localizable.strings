@@ -266,6 +266,14 @@
 "Binary file (not shown)" = "Fitxer binari (no mostrat)";
 "Large file — %d changes, click to load" = "Fitxer gran — %d canvis, fes clic per carregar";
 
+/* Changes sidebar - Files changed tree */
+"Files changed" = "Fitxers canviats";
+"Added" = "Afegit";
+"Modified" = "Modificat";
+"Deleted" = "Suprimit";
+"Renamed" = "Reanomenat";
+"Binary file" = "Fitxer binari";
+
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "Nou flux de treball (permisos complets)";
 "New workstream (with prompts)" = "Nou flux de treball (amb confirmació)";

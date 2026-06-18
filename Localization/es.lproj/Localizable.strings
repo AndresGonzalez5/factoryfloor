@@ -266,6 +266,14 @@
 "Binary file (not shown)" = "Archivo binario (no mostrado)";
 "Large file — %d changes, click to load" = "Archivo grande — %d cambios, haz clic para cargar";
 
+/* Changes sidebar - Files changed tree */
+"Files changed" = "Archivos cambiados";
+"Added" = "Añadido";
+"Modified" = "Modificado";
+"Deleted" = "Eliminado";
+"Renamed" = "Renombrado";
+"Binary file" = "Archivo binario";
+
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "Nuevo flujo de trabajo (permisos completos)";
 "New workstream (with prompts)" = "Nuevo flujo de trabajo (con confirmación)";

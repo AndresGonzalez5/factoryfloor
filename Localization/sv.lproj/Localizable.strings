@@ -266,6 +266,14 @@
 "Binary file (not shown)" = "Binärfil (visas inte)";
 "Large file — %d changes, click to load" = "Stor fil — %d ändringar, klicka för att läsa in";
 
+/* Changes sidebar - Files changed tree */
+"Files changed" = "Ändrade filer";
+"Added" = "Tillagd";
+"Modified" = "Ändrad";
+"Deleted" = "Borttagen";
+"Renamed" = "Omdöpt";
+"Binary file" = "Binärfil";
+
 /* ProjectSidebar - context menu */
 "New workstream (full permissions)" = "Nytt arbetsflöde (fulla behörigheter)";
 "New workstream (with prompts)" = "Nytt arbetsflöde (med bekräftelse)";

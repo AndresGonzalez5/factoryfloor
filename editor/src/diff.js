@@ -251,6 +251,15 @@ window.diffAPI = {
     for (const entry of sections.values()) {
       if (entry.editor) entry.editor.layout()
     }
+  },
+
+  // Scroll the diff page so the given file's section is at the top of the
+  // viewport. Works for normal, binary, and deferred (placeholder) files since
+  // every file registers its section element in `sections` keyed by exact path.
+  scrollToFile(path) {
+    const entry = sections.get(path)
+    if (!entry || !entry.host) return
+    entry.host.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 }
 

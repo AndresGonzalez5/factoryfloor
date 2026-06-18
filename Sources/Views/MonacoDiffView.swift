@@ -38,6 +38,11 @@ final class MonacoDiffBridge: ObservableObject {
     /// it survives the SwiftUI view being re-created on a tab switch.
     var lastFileCount = 0
 
+    /// Structured changed-file list from the last load. Cached here (not @State)
+    /// so the Changes sidebar tree survives the SwiftUI view being re-created on
+    /// a tab switch, matching `lastFileCount`/`hasContent`.
+    var lastDiffFiles: [DiffFile] = []
+
     /// Whether setFiles() has run at least once (cached content lives in the WebView).
     private(set) var hasContent = false
 
@@ -132,6 +137,17 @@ final class MonacoDiffBridge: ObservableObject {
         }
     }
 
+    /// Scroll the diff page so the given file's section is at the top. Queues
+    /// until the webview is ready, mirroring the other bridge calls. Works for
+    /// normal, binary, and deferred files (each registers a section element).
+    func scrollToFile(_ path: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            guard let json = Self.jsonString(fromString: path) else { return }
+            webView.evaluateJavaScript("window.diffAPI.scrollToFile(\(json))")
+        }
+    }
+
     // MARK: - Ready state
 
     fileprivate func markReady() {
@@ -219,6 +235,19 @@ final class MonacoDiffBridge: ObservableObject {
               let data = try? JSONSerialization.data(withJSONObject: value),
               let json = String(data: data, encoding: .utf8)
         else {
+            return nil
+        }
+        return json
+    }
+
+    /// JSON-encode a bare string into a JS-safe quoted literal (e.g. a file
+    /// path passed as a function argument). `.fragmentsAllowed` lets us encode a
+    /// top-level string, which `isValidJSONObject` would otherwise reject.
+    private static func jsonString(fromString value: String) -> String? {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed]
+        ), let json = String(data: data, encoding: .utf8) else {
             return nil
         }
         return json

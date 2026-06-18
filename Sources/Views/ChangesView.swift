@@ -31,18 +31,49 @@ struct ChangesView: View {
     @State private var fileCount = 0
     @State private var mode: ChangesMode = .branch
 
+    /// The current changed-file set, surfaced for the sidebar tree. Captured
+    /// from the same load that builds the diff payload (no extra git read).
+    @State private var diffFiles: [DiffFile] = []
+    /// The leaf currently selected in the sidebar (its full relative path).
+    @State private var selectedFilePath: String?
+
     var body: some View {
         VStack(spacing: 0) {
             changesToolbar
-            ZStack {
-                MonacoDiffView(bridge: bridge)
-                if isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(.background)
+            if fileCount == 0 {
+                // Empty state: no sidebar skeleton — just the "No changes" webview.
+                ZStack {
+                    MonacoDiffView(bridge: bridge)
+                    if isLoading {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(.background)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HSplitView {
+                    ChangesFileTreeSidebar(
+                        files: diffFiles,
+                        selectedFilePath: $selectedFilePath,
+                        onSelect: { path in
+                            bridge.scrollToFile(path)
+                        }
+                    )
+                    .frame(minWidth: 180, idealWidth: 240, maxWidth: 480)
+
+                    ZStack {
+                        MonacoDiffView(bridge: bridge)
+                        if isLoading {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(.background)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
             // Make sure the bridge can resolve content for click-to-load before
@@ -53,6 +84,7 @@ struct ChangesView: View {
                 // Cached content exists for this mode — show it, refresh in background.
                 isLoading = false
                 fileCount = bridge.lastFileCount
+                diffFiles = bridge.lastDiffFiles
                 backgroundRefreshIfNeeded()
             } else {
                 fullLoad()
@@ -143,21 +175,24 @@ struct ChangesView: View {
                 projectPath: projDir,
                 mode: currentMode.rawValue
             )
-            let payload = Self.buildPayload(
+            let contents = Self.buildContents(
                 workDir: workDir,
                 projDir: projDir,
                 mode: currentMode
             )
 
             DispatchQueue.main.async {
-                fileCount = payload.count
-                bridge.lastFileCount = payload.count
+                diffFiles = contents.files
+                selectedFilePath = nil
+                fileCount = contents.payload.count
+                bridge.lastFileCount = contents.payload.count
+                bridge.lastDiffFiles = contents.files
                 bridge.lastFingerprint = fingerprint
                 bridge.lastMode = currentMode.rawValue
                 bridge.onContentReady = {
                     isLoading = false
                 }
-                bridge.setFiles(payload)
+                bridge.setFiles(contents.payload)
             }
         }
     }
@@ -182,22 +217,25 @@ struct ChangesView: View {
                 return
             }
 
-            let payload = Self.buildPayload(
+            let contents = Self.buildContents(
                 workDir: workDir,
                 projDir: projDir,
                 mode: currentMode
             )
 
             DispatchQueue.main.async {
-                fileCount = payload.count
-                bridge.lastFileCount = payload.count
+                diffFiles = contents.files
+                selectedFilePath = nil
+                fileCount = contents.payload.count
+                bridge.lastFileCount = contents.payload.count
+                bridge.lastDiffFiles = contents.files
                 bridge.lastFingerprint = fingerprint
                 bridge.lastMode = currentMode.rawValue
                 isRefreshing = true
                 bridge.onContentReady = {
                     isRefreshing = false
                 }
-                bridge.setFiles(payload)
+                bridge.setFiles(contents.payload)
             }
         }
     }
@@ -263,6 +301,18 @@ struct ChangesView: View {
         projDir: String,
         mode: ChangesMode
     ) -> [[String: Any]] {
+        buildContents(workDir: workDir, projDir: projDir, mode: mode).payload
+    }
+
+    /// Build both the JS `setFiles` payload AND the structured, sorted list of
+    /// changed files in one pass. The sidebar tree is built from `files` while
+    /// the diff webview renders `payload`; sharing one git read keeps the two in
+    /// sync and avoids re-running git for the sidebar.
+    nonisolated static func buildContents(
+        workDir: String,
+        projDir: String,
+        mode: ChangesMode
+    ) -> (payload: [[String: Any]], files: [DiffFile]) {
         let diffFiles: [DiffFile]
         switch mode {
         case .branch:
@@ -314,7 +364,7 @@ struct ChangesView: View {
             payload.append(entry)
         }
 
-        return payload
+        return (payload, sorted)
     }
 
     // MARK: - Content resolution helpers
