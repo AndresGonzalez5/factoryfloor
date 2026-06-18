@@ -137,10 +137,13 @@ struct ChangesFileTreeSidebar: View {
 /// children; leaves render a selectable file row with a status badge and counts.
 private struct ChangesFileTreeRow: View {
     let node: FileTreeNode
+    // Directories start expanded so the tree shows files all the way down on
+    // load (no clicking through each level). Users can still collapse manually.
+    @State private var isExpanded = true
 
     var body: some View {
         if node.isDirectory {
-            DisclosureGroup {
+            DisclosureGroup(isExpanded: $isExpanded) {
                 ForEach(node.children ?? []) { child in
                     ChangesFileTreeRow(node: child)
                 }
