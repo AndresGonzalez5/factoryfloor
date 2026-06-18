@@ -184,6 +184,7 @@ targets:
           - $(PROJECT_DIR)/editor/bun.lock
           - $(PROJECT_DIR)/editor/src/main.js
           - $(PROJECT_DIR)/editor/src/diff.js
+          - $(PROJECT_DIR)/editor/src/shared-init.js
           - $(PROJECT_DIR)/editor/index.html
           - $(PROJECT_DIR)/editor/diff.html
           - $(PROJECT_DIR)/editor/vite.config.js
