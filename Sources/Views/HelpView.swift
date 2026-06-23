@@ -40,6 +40,12 @@ struct HelpView: View {
                             .foregroundStyle(.secondary)
                     }
                     HStack(spacing: 0) {
+                        Text("Enhanced by ")
+                            .foregroundStyle(.tertiary)
+                        Link("Andrés González.", destination: URL(string: "https://github.com/AndresGonzalez5")!)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 0) {
                         Text("Help ")
                             .foregroundStyle(.tertiary)
                         Link("supporting", destination: localizedURL("sponsor"))
@@ -142,6 +148,14 @@ struct HelpView: View {
                     }
                     Link("davidpoblador.com", destination: URL(string: "https://davidpoblador.com")!)
                         .font(.caption)
+                    HStack(spacing: 4) {
+                        Text("Enhanced by ")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Link("Andrés González", destination: URL(string: "https://github.com/AndresGonzalez5")!)
+                            .font(.caption)
+                    }
+                    .padding(.top, 4)
                 }
                 .padding(.bottom, 32)
             }

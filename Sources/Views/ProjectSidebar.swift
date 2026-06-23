@@ -237,6 +237,12 @@ struct ProjectSidebar: View {
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 0) {
+                    Text("Enhanced by ")
+                        .foregroundStyle(.tertiary)
+                    Link("Andrés González.", destination: URL(string: "https://github.com/AndresGonzalez5")!)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 0) {
                     Text("Help ")
                         .foregroundStyle(.tertiary)
                     Link("supporting", destination: sponsorURL)
