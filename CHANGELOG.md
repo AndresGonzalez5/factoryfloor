@@ -3,6 +3,13 @@
 ## [0.1.78](https://github.com/alltuner/factoryfloor/compare/v0.1.77...v0.1.78) (2026-07-30)
 
 
+### Security
+
+* **Repository-provided `setup`, `run` and `teardown` commands now require your approval before they run.** Earlier versions ran `setup` automatically the first time a workstream's workspace opened, and `teardown` automatically when a workstream was archived, with its output discarded. Neither asked for approval, so adding an untrusted repository and creating a workstream for it could execute a command that the repository supplied, under your user account, with no prompt. Advisory: GHSA-923q-2hmp-prq3 (High, CVSS 7.8).
+* The workspace now shows every command and the config file it was read from, and runs nothing until you approve it. Approval is bound to the command text, so an edited config is presented for approval again rather than inheriting the earlier decision, and it can be withdrawn from the Info tab. Repositories you had already added are not carried over; they are presented for approval the next time you create a workstream.
+* Reported by AI Census Labs (https://github.com/aicensus-labs) and Junjie He (https://github.com/glmgbj233). Thank you both.
+
+
 ### Bug Fixes
 
 * **build:** restore ghostty submodule gitlink ([233c9c8](https://github.com/alltuner/factoryfloor/commit/233c9c848cdb35f51cf453a609d13614bad57b83))
@@ -13,6 +20,10 @@
 ### Bug Fixes
 
 * **scripts:** require approval before running repository-provided commands ([a53903a](https://github.com/alltuner/factoryfloor/commit/a53903ae4426995c2b260aff580540c834d70834))
+
+### Note
+
+* This version has no downloadable build, because its release build failed. The same fix ships in 0.1.78, which is the first installable release carrying it.
 
 ## [0.1.76](https://github.com/alltuner/factoryfloor/compare/v0.1.75...v0.1.76) (2026-05-29)
 
