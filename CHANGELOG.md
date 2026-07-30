@@ -7,7 +7,7 @@
 
 * **Repository-provided `setup`, `run` and `teardown` commands now require your approval before they run.** Earlier versions ran `setup` automatically the first time a workstream's workspace opened, and `teardown` automatically when a workstream was archived, with its output discarded. Neither asked for approval, so adding an untrusted repository and creating a workstream for it could execute a command that the repository supplied, under your user account, with no prompt. Advisory: GHSA-923q-2hmp-prq3 (High, CVSS 7.8).
 * The workspace now shows every command and the config file it was read from, and runs nothing until you approve it. Approval is bound to the command text, so an edited config is presented for approval again rather than inheriting the earlier decision, and it can be withdrawn from the Info tab. Repositories you had already added are not carried over; they are presented for approval the next time you create a workstream.
-* Reported by AI Census Labs (https://github.com/aicensus-labs) and Junjie He (https://github.com/glmgbj233). Thank you both.
+* Reported by AI Census Labs, https://github.com/aicensus-labs, and Junjie He, https://github.com/glmgbj233. Thank you both.
 
 
 ### Bug Fixes
