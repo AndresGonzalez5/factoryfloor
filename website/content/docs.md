@@ -217,6 +217,8 @@ Drop a `.factoryfloor.json` in your project root to automate the workstream life
 
 All fields are optional. Scripts run in the workstream directory using your login shell. Yes, even [fish](https://github.com/alltuner/factoryfloor/pull/324). Don't ask how long that took.
 
+These commands come from the repository, so Factory Floor asks you to approve them before it runs any of them. It shows each command and the file it came from, runs nothing until you approve, and asks again when the commands change. Withdraw approval any time from the Info tab.
+
 Factory Floor also reads `.emdash.json`, `conductor.json`, and `.superset/config.json` if `.factoryfloor.json` doesn't exist. Because compatibility is polite. (Time for a [standard](https://xkcd.com/927/)?) When using a fallback config, Factory Floor injects compatibility environment variables so scripts work without modification (e.g. `CONDUCTOR_PORT`, `EMDASH_PORT`, `SUPERSET_PORT_BASE`).
 
 #### The Environment tab

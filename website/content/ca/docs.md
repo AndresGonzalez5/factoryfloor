@@ -208,6 +208,8 @@ Posa un `.factoryfloor.json` a l'arrel del teu projecte per automatitzar el cicl
 
 Tots els camps són opcionals. Els scripts s'executen al directori del workstream usant el teu shell de login. Sí, fins i tot [fish](https://github.com/alltuner/factoryfloor/pull/324). No preguntis quant de temps va costar.
 
+Aquestes ordres provenen del repositori, així que Factory Floor et demana que les aprovis abans d'executar-ne cap. Et mostra cada ordre i el fitxer d'on prové, no executa res fins que ho aprovis, i t'ho torna a demanar quan les ordres canvien. Pots revocar l'aprovació en qualsevol moment des del tab Info.
+
 Factory Floor també llegeix `.emdash.json`, `conductor.json` i `.superset/config.json` si `.factoryfloor.json` no existeix. Perquè la compatibilitat és de bona educació. (Hora d'un [estàndard](https://xkcd.com/927/)?) Quan s'usa una configuració de compatibilitat, Factory Floor injecta variables d'entorn de compatibilitat perquè els scripts funcionin sense modificació (p. ex. `CONDUCTOR_PORT`, `EMDASH_PORT`, `SUPERSET_PORT_BASE`).
 
 #### El tab Environment {#the-environment-tab}

@@ -249,9 +249,17 @@ enum TerminalSessionMode: Equatable {
 
 enum SetupGateState: Equatable {
     case notNeeded
+    case awaitingApproval
     case running
     case failed
     case completed
+
+    /// A setup script only runs once per workstream, and only once the user has
+    /// approved the commands the repository supplied.
+    static func resolve(hasSetupScript: Bool, setupCompleted: Bool, scriptsApproved: Bool) -> SetupGateState {
+        guard hasSetupScript, !setupCompleted else { return .notNeeded }
+        return scriptsApproved ? .running : .awaitingApproval
+    }
 }
 
 struct TerminalContainerView: View {
@@ -297,6 +305,7 @@ struct TerminalContainerView: View {
     @State private var workspaceStarted = false
     @State private var defaultBranch = "main"
     @State private var setupGateState: SetupGateState = .notNeeded
+    @State private var scriptsApproved = false
     init(
         workstreamID: UUID,
         workingDirectory: String,
@@ -355,6 +364,9 @@ struct TerminalContainerView: View {
     private var visibleSurfaceIDs: Set<UUID>? {
         switch activeTab {
         case .agent:
+            if setupGateState == .awaitingApproval {
+                return []
+            }
             if setupGateState == .running || setupGateState == .failed {
                 return [setupGateID]
             }
@@ -586,10 +598,13 @@ struct TerminalContainerView: View {
                 environmentVars: terminalEnvVars,
                 runStoppedManually: $runStoppedManually,
                 runStarted: $runStarted,
+                scriptsApproved: $scriptsApproved,
                 sessionMode: sessionMode
             )
         case .agent:
-            if setupGateState == .running {
+            if setupGateState == .awaitingApproval {
+                setupApprovalView
+            } else if setupGateState == .running {
                 setupGateRunningView
             } else if setupGateState == .failed {
                 setupGateFailedView
@@ -759,6 +774,10 @@ struct TerminalContainerView: View {
 
     var body: some View {
         mainContent
+            .onChange(of: scriptsApproved) { _, approved in
+                // Approving from the Info tab releases a waiting setup script.
+                if approved { startApprovedSetup() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .switchByNumber)) { notification in
                 guard isActive else { return }
                 guard let n = notification.object as? Int, n >= 1 else { return }
@@ -1147,10 +1166,13 @@ struct TerminalContainerView: View {
         }
         appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
         cachedClaudeCommand = buildClaudeCommand()
-        if scriptConfig.setup != nil, !SetupStateStore.isCompleted(for: workstreamID) {
-            setupGateState = .running
-        } else {
-            setupGateState = .notNeeded
+        scriptsApproved = ScriptTrust.isApproved(scriptConfig, for: projectDirectory)
+        setupGateState = SetupGateState.resolve(
+            hasSetupScript: scriptConfig.setup != nil,
+            setupCompleted: SetupStateStore.isCompleted(for: workstreamID),
+            scriptsApproved: scriptsApproved
+        )
+        if setupGateState == .notNeeded {
             surfaceCache.respawnableIDs.insert(claudeID)
         }
         preloadSurfaces()
@@ -1165,6 +1187,8 @@ struct TerminalContainerView: View {
     private func preloadSurfaces() {
         guard sessionMode != .waitingForTools else { return }
         guard let app = TerminalApp.shared.app else { return }
+        // Nothing may start while the setup script is waiting to be approved.
+        guard setupGateState != .awaitingApproval else { return }
 
         if setupGateState == .running {
             // Setup gate: only preload setup surface, agent waits.
@@ -1217,6 +1241,30 @@ struct TerminalContainerView: View {
             defaultBranch: defaultBranch,
             scriptSource: scriptConfig.source
         )
+    }
+
+    private var setupApprovalView: some View {
+        ScriptApprovalView(
+            scriptConfig: scriptConfig,
+            approveLabel: NSLocalizedString("Approve and Run Setup", comment: ""),
+            onApprove: approveScripts,
+            secondaryLabel: NSLocalizedString("Skip Setup", comment: ""),
+            onSecondary: launchAgentAfterSetup
+        )
+    }
+
+    private func approveScripts() {
+        ScriptTrust.approve(scriptConfig, for: projectDirectory)
+        scriptsApproved = true
+        startApprovedSetup()
+    }
+
+    /// Runs the setup script once its commands have been approved.
+    private func startApprovedSetup() {
+        guard setupGateState == .awaitingApproval else { return }
+        setupGateState = .running
+        preloadSurfaces()
+        surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
     }
 
     private var setupGateRunningView: some View {

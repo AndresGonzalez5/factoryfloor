@@ -292,3 +292,18 @@
 "No GitHub remote found for this project." = "Kein GitHub-Remote für dieses Projekt gefunden.";
 "Quick action debug" = "Schnellaktionen-Debug";
 "Show a debug panel with command output from quick actions (Create PR, Commit & Push)." = "Zeige ein Debug-Panel mit Befehlsausgaben der Schnellaktionen (PR erstellen, Commit & Push).";
+
+/* Script approval */
+"Teardown" = "Teardown";
+"Approval" = "Genehmigung";
+"Approved" = "Genehmigt";
+"Not approved" = "Nicht genehmigt";
+"Approve" = "Genehmigen";
+"Revoke" = "Widerrufen";
+"Approve scripts from this repository?" = "Skripte aus diesem Repository genehmigen?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "Diese Befehle stammen aus %@ im Repository und werden auf deinem Rechner unter deinem Benutzerkonto ausgeführt.";
+"These commands come from the repository and run on your machine under your user account." = "Diese Befehle stammen aus dem Repository und werden auf deinem Rechner unter deinem Benutzerkonto ausgeführt.";
+"Approval covers this repository until the commands change." = "Die Genehmigung gilt für dieses Repository, bis sich die Befehle ändern.";
+"Approve and Run Setup" = "Genehmigen und Setup ausführen";
+"Skip Setup" = "Setup überspringen";
+"Approve and Start" = "Genehmigen und starten";

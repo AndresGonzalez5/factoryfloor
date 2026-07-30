@@ -295,3 +295,18 @@
 "No GitHub remote found for this project." = "No s'ha trobat cap remot de GitHub per a aquest projecte.";
 "Quick action debug" = "Depuració d'accions ràpides";
 "Show a debug panel with command output from quick actions (Create PR, Commit & Push)." = "Mostra un panell de depuració amb la sortida de les accions ràpides (Crear PR, Commit i Push).";
+
+/* Script approval */
+"Teardown" = "Desmuntatge";
+"Approval" = "Aprovació";
+"Approved" = "Aprovat";
+"Not approved" = "Sense aprovar";
+"Approve" = "Aprovar";
+"Revoke" = "Revocar";
+"Approve scripts from this repository?" = "Vols aprovar els scripts d'aquest repositori?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "Aquestes ordres provenen de %@ del repositori i s'executen al teu ordinador amb el teu compte d'usuari.";
+"These commands come from the repository and run on your machine under your user account." = "Aquestes ordres provenen del repositori i s'executen al teu ordinador amb el teu compte d'usuari.";
+"Approval covers this repository until the commands change." = "L'aprovació és vàlida per a aquest repositori fins que les ordres canviïn.";
+"Approve and Run Setup" = "Aprovar i executar la configuració inicial";
+"Skip Setup" = "Ometre la configuració inicial";
+"Approve and Start" = "Aprovar i iniciar";

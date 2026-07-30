@@ -208,6 +208,8 @@ Lägg en `.factoryfloor.json` i projektets rotkatalog för att automatisera work
 
 Alla fält är valfria. Script körs i workstream-katalogen med ditt login shell. Ja, även [fish](https://github.com/alltuner/factoryfloor/pull/324). Fråga inte hur lång tid det tog.
 
+Dessa kommandon kommer från repositoryt, så Factory Floor ber dig godkänna dem innan något körs. Du ser varje kommando och filen det kommer från, inget körs förrän du godkänner, och du får frågan igen när kommandona ändras. Du kan återkalla godkännandet när som helst från Info-tabben.
+
 Factory Floor läser också `.emdash.json`, `conductor.json` och `.superset/config.json` om `.factoryfloor.json` inte finns. För kompatibilitet är artigt. (Dags för en [standard](https://xkcd.com/927/)?) Vid fallback-konfiguration injicerar Factory Floor kompatibla miljövariabler så att script fungerar utan ändring (t.ex. `CONDUCTOR_PORT`, `EMDASH_PORT`, `SUPERSET_PORT_BASE`).
 
 #### Environment-tabben {#the-environment-tab}

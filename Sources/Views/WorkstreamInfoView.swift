@@ -14,6 +14,7 @@ struct WorkstreamInfoView: View {
     var environmentVars: [String: String] = [:]
     @Binding var runStoppedManually: Bool
     @Binding var runStarted: Bool
+    @Binding var scriptsApproved: Bool
     var sessionMode: TerminalSessionMode = .standard
 
     @EnvironmentObject var appEnv: AppEnvironment
@@ -178,6 +179,25 @@ struct WorkstreamInfoView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        LabeledContent("Approval") {
+                            HStack(spacing: 10) {
+                                if scriptsApproved {
+                                    Label("Approved", systemImage: "checkmark.shield")
+                                        .foregroundStyle(.green)
+                                    Button("Revoke") {
+                                        ScriptTrust.revoke(for: projectDirectory)
+                                        scriptsApproved = false
+                                    }
+                                } else {
+                                    Label("Not approved", systemImage: "exclamationmark.shield")
+                                        .foregroundStyle(.orange)
+                                    Button("Approve") {
+                                        ScriptTrust.approve(scriptConfig, for: projectDirectory)
+                                        scriptsApproved = true
+                                    }
+                                }
+                            }
+                        }
                     } header: {
                         HStack {
                             Text("Scripts")
@@ -210,12 +230,14 @@ struct WorkstreamInfoView: View {
                         workstreamID: workstreamID,
                         workingDirectory: workingDirectory,
                         projectName: projectName,
+                        projectDirectory: projectDirectory,
                         workstreamName: workstreamName,
                         scriptConfig: scriptConfig,
                         useTmux: useTmux,
                         environmentVars: environmentVars,
                         runStoppedManually: $runStoppedManually,
-                        runStarted: $runStarted
+                        runStarted: $runStarted,
+                        scriptsApproved: $scriptsApproved
                     )
                 }
             } else {

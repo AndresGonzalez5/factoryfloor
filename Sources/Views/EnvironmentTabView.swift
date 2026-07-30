@@ -3,8 +3,8 @@
 
 import SwiftUI
 
-func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSession: Bool, wasStoppedManually: Bool) -> Bool {
-    useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually
+func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSession: Bool, wasStoppedManually: Bool, isApproved: Bool) -> Bool {
+    useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually && isApproved
 }
 
 func scriptCommand(script: String, role: String, shell: String = CommandBuilder.userShell) -> String {
@@ -21,12 +21,14 @@ struct EnvironmentTabView: View {
     let workstreamID: UUID
     let workingDirectory: String
     let projectName: String
+    let projectDirectory: String
     let workstreamName: String
     let scriptConfig: ScriptConfig
     let useTmux: Bool
     let environmentVars: [String: String]
     @Binding var runStoppedManually: Bool
     @Binding var runStarted: Bool
+    @Binding var scriptsApproved: Bool
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject var appEnv: AppEnvironment
@@ -54,7 +56,7 @@ struct EnvironmentTabView: View {
     private var environmentContent: some View {
         runPane()
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
-                if scriptConfig.run != nil {
+                if scriptConfig.run != nil, scriptsApproved {
                     if runStarted {
                         restartRun()
                     } else {
@@ -62,6 +64,10 @@ struct EnvironmentTabView: View {
                         runStarted = true
                     }
                 }
+            }
+            .onChange(of: scriptsApproved) { _, approved in
+                // Withdrawing approval stops what the repository is already running.
+                if !approved, runStarted { stopRun() }
             }
             .onAppear {
                 restoreRunState()
@@ -74,7 +80,7 @@ struct EnvironmentTabView: View {
         let shortcut = "⌘⇧⏎"
         VStack(spacing: 0) {
             HStack {
-                if scriptConfig.run != nil, !runStarted {
+                if runControlsEnabled, !runStarted {
                     Button(action: {
                         runStoppedManually = false
                         runStarted = true
@@ -110,7 +116,7 @@ struct EnvironmentTabView: View {
 
                 Spacer()
 
-                if scriptConfig.run != nil {
+                if runControlsEnabled {
                     if runStarted {
                         EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: stopRun)
                         EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: restartRun)
@@ -129,7 +135,18 @@ struct EnvironmentTabView: View {
             Divider()
 
             if let script = scriptConfig.run {
-                if runStarted && !runRestarting {
+                if !scriptsApproved {
+                    ScriptApprovalView(
+                        scriptConfig: scriptConfig,
+                        approveLabel: NSLocalizedString("Approve and Start", comment: ""),
+                        onApprove: {
+                            ScriptTrust.approve(scriptConfig, for: projectDirectory)
+                            scriptsApproved = true
+                            runStoppedManually = false
+                            runStarted = true
+                        }
+                    )
+                } else if runStarted && !runRestarting {
                     SingleTerminalView(
                         surfaceID: runID,
                         workingDirectory: workingDirectory,
@@ -302,6 +319,10 @@ struct EnvironmentTabView: View {
         }
     }
 
+    private var runControlsEnabled: Bool {
+        scriptConfig.run != nil && scriptsApproved
+    }
+
     private func restoreRunState() {
         guard !runStarted,
               useTmux,
@@ -309,7 +330,7 @@ struct EnvironmentTabView: View {
               let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
         let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
-        if shouldRestoreRunSession(useTmux: useTmux, hasRunScript: scriptConfig.run != nil, hasExistingRunSession: hasExistingRunSession, wasStoppedManually: runStoppedManually) {
+        if shouldRestoreRunSession(useTmux: useTmux, hasRunScript: scriptConfig.run != nil, hasExistingRunSession: hasExistingRunSession, wasStoppedManually: runStoppedManually, isApproved: scriptsApproved) {
             runStarted = true
         }
     }

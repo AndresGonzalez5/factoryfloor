@@ -208,6 +208,8 @@ Lege eine `.factoryfloor.json` in dein Projektstammverzeichnis, um den Workstrea
 
 Alle Felder sind optional. Skripte laufen im Workstream-Verzeichnis mit deiner Login-Shell. Ja, sogar [fish](https://github.com/alltuner/factoryfloor/pull/324). Frag nicht, wie lange das gedauert hat.
 
+Diese Befehle stammen aus dem Repository, deshalb fragt Factory Floor nach deiner Genehmigung, bevor einer davon läuft. Du siehst jeden Befehl und die Datei, aus der er kommt, es wird nichts ausgeführt, bis du zustimmst, und bei Änderungen wird erneut gefragt. Die Genehmigung kannst du jederzeit im Info-Tab widerrufen.
+
 Factory Floor liest auch `.emdash.json`, `conductor.json` und `.superset/config.json`, wenn `.factoryfloor.json` nicht existiert. Weil Kompatibilität höflich ist. (Zeit für einen [Standard](https://xkcd.com/927/)?) Bei Fallback-Konfiguration injiziert Factory Floor kompatible Umgebungsvariablen, damit Skripte ohne Änderung funktionieren (z.B. `CONDUCTOR_PORT`, `EMDASH_PORT`, `SUPERSET_PORT_BASE`).
 
 #### Der Environment-Tab {#the-environment-tab}

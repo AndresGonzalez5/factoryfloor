@@ -295,3 +295,18 @@
 "No GitHub remote found for this project." = "Ingen GitHub-fjärrserver hittades för detta projekt.";
 "Quick action debug" = "Felsökning av snabbåtgärder";
 "Show a debug panel with command output from quick actions (Create PR, Commit & Push)." = "Visa en felsökningspanel med kommandoutdata från snabbåtgärder (Skapa PR, Commit & Push).";
+
+/* Script approval */
+"Teardown" = "Nedstängning";
+"Approval" = "Godkännande";
+"Approved" = "Godkänd";
+"Not approved" = "Inte godkänd";
+"Approve" = "Godkänn";
+"Revoke" = "Återkalla";
+"Approve scripts from this repository?" = "Godkänn skript från detta repository?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "Dessa kommandon kommer från %@ i repositoryt och körs på din dator med ditt användarkonto.";
+"These commands come from the repository and run on your machine under your user account." = "Dessa kommandon kommer från repositoryt och körs på din dator med ditt användarkonto.";
+"Approval covers this repository until the commands change." = "Godkännandet gäller detta repository till dess att kommandona ändras.";
+"Approve and Run Setup" = "Godkänn och kör konfiguration";
+"Skip Setup" = "Hoppa över konfiguration";
+"Approve and Start" = "Godkänn och starta";

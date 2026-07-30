@@ -208,6 +208,8 @@ Coloca un `.factoryfloor.json` en la raíz de tu proyecto para automatizar el ci
 
 Todos los campos son opcionales. Los scripts se ejecutan en el directorio del workstream usando tu login shell. Sí, incluso [fish](https://github.com/alltuner/factoryfloor/pull/324). No preguntes cuánto tardó eso.
 
+Estas órdenes provienen del repositorio, así que Factory Floor te pide que las apruebes antes de ejecutar ninguna. Te muestra cada orden y el archivo del que viene, no ejecuta nada hasta que lo apruebes, y te lo vuelve a pedir cuando las órdenes cambian. Puedes revocar la aprobación en cualquier momento desde el tab Info.
+
 Factory Floor también lee `.emdash.json`, `conductor.json` y `.superset/config.json` si `.factoryfloor.json` no existe. Porque la compatibilidad es de buena educación. (¿Es hora de un [estándar](https://xkcd.com/927/)?) Cuando se usa una configuración de compatibilidad, Factory Floor inyecta variables de entorno de compatibilidad para que los scripts funcionen sin modificación (p. ej. `CONDUCTOR_PORT`, `EMDASH_PORT`, `SUPERSET_PORT_BASE`).
 
 #### El tab Environment {#the-environment-tab}
