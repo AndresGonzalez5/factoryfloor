@@ -327,8 +327,13 @@ struct ContentView: View {
                 if newValue != .settings && newValue != .help {
                     newValue?.save()
                 }
-                // Auto-focus terminal when selecting a workstream
-                if case .workstream = newValue {
+                // Auto-focus Coding Agent only when there's no restored tab state to honor
+                if case let .workstream(wsID) = newValue,
+                   shouldAutoFocusAgent(
+                       snapshot: surfaceCache.restoreTabSnapshot(for: wsID),
+                       savedTab: WorkspaceStateStore.load(for: wsID)
+                   )
+                {
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: .focusAgent, object: nil)
                     }

@@ -227,6 +227,27 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
         XCTAssertEqual(state.activeTab, .terminal(terminalID))
     }
 
+    func testShouldAutoFocusAgentOnlyWhenNothingToRestore() {
+        let terminalID = UUID()
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.info, .agent, .terminal(terminalID)],
+            terminalCount: 1,
+            browserCount: 0,
+            editorCount: 0,
+            activeTab: .terminal(terminalID),
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+
+        XCTAssertTrue(shouldAutoFocusAgent(snapshot: nil, savedTab: nil))
+        XCTAssertFalse(shouldAutoFocusAgent(snapshot: snapshot, savedTab: nil))
+        XCTAssertFalse(shouldAutoFocusAgent(snapshot: nil, savedTab: .agent))
+        XCTAssertFalse(shouldAutoFocusAgent(snapshot: snapshot, savedTab: .info))
+    }
+
     func testStartupStateMigrationInsertsChangesWhenAgentMissing() {
         // Defensive: if .agent is somehow absent, .changes still gets inserted (idempotently)
         // at a sensible fixed index without crashing.

@@ -221,6 +221,13 @@ func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: Restora
     )
 }
 
+/// Whether selecting a workstream from the sidebar should auto-focus the Coding Agent.
+/// Returns true only when there is no tab state to restore — new workstreams open on
+/// the Coding Agent, previously-visited ones restore their last-active tab.
+func shouldAutoFocusAgent(snapshot: WorkspaceTabSnapshot?, savedTab: RestorableWorkspaceTab?) -> Bool {
+    snapshot == nil && savedTab == nil
+}
+
 func workspaceEnvironmentVariables(
     workstreamID: UUID,
     projectName: String,
