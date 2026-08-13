@@ -186,6 +186,7 @@ Current shortcuts:
 - **Cmd+T**: New Terminal
 - **Cmd+B**: New Browser
 - **Cmd+O**: New Editor
+- **Cmd+P**: Find File (Editor)
 - **Cmd+S**: Save (Editor)
 - **Cmd+Shift+S**: Save As (Editor)
 - **Cmd+W**: Close tab

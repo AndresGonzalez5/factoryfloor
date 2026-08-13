@@ -100,6 +100,11 @@
 "Browser" = "Webbläsare";
 "Editor" = "Redigerare";
 "New Editor (\u2318E)" = "Ny redigerare (\u2318E)";
+"Find File" = "Sök fil";
+"Find File (\u2318P)" = "Sök fil (\u2318P)";
+"Search files by name" = "Sök filer efter namn";
+"No files found" = "Inga filer hittades";
+"Scanning files…" = "Skannar filer…";
 "Open File" = "Öppna fil";
 "Toggle file tree" = "Visa/dölj filträd";
 "Select a file to edit" = "Välj en fil att redigera";

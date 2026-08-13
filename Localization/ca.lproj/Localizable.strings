@@ -100,6 +100,11 @@
 "Browser" = "Navegador";
 "Editor" = "Editor";
 "New Editor (\u2318E)" = "Nou editor (\u2318E)";
+"Find File" = "Cerca un fitxer";
+"Find File (\u2318P)" = "Cerca un fitxer (\u2318P)";
+"Search files by name" = "Cerca fitxers pel nom";
+"No files found" = "No s'han trobat fitxers";
+"Scanning files…" = "Escanejant fitxers…";
 "Open File" = "Obrir fitxer";
 "Toggle file tree" = "Commuta l'arbre de fitxers";
 "Select a file to edit" = "Selecciona un fitxer per editar";

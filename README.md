@@ -57,7 +57,7 @@ Factory Floor is a native macOS app built on [Ghostty](https://ghostty.org)'s GP
 - **GitHub Integration** &mdash; Repo info, open PRs, and branch PR status via the `gh` CLI.
 - **Dynamic Tabs** &mdash; Open as many terminals, browsers, and editors as you need. Close with Cmd+W or Ctrl+D.
 - **Update Notifications** &mdash; Checks for new versions and shows a badge in the sidebar.
-- **Keyboard-first** &mdash; Every action has a shortcut. Cmd+1-9 for tabs, Cmd+Return for agent, Cmd+T for terminal, Cmd+B for browser, Cmd+O for editor.
+- **Keyboard-first** &mdash; Every action has a shortcut. Cmd+1-9 for tabs, Cmd+Return for agent, Cmd+T for terminal, Cmd+B for browser, Cmd+O for editor, Cmd+P to jump to any file in the editor.
 
 ### Tmux Mode
 
@@ -134,6 +134,7 @@ Every workstream terminal has access to:
 | `Cmd+T` | New Terminal |
 | `Cmd+B` | New Browser |
 | `Cmd+O` | New Editor |
+| `Cmd+P` | Find File (Editor) |
 | `Cmd+J` | Toggle pixel agents |
 | `Cmd+S` | Save (Editor) |
 | `Cmd+Shift+S` | Save As (Editor) |

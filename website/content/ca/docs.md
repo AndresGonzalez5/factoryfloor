@@ -167,6 +167,7 @@ Factory Floor prioritza el teclat. Aquí tens tot.
 | ⌘T | Nou Terminal |
 | ⌘B | Nou navegador |
 | ⌘J | Mostra/oculta agents píxel |
+| ⌘P | Cerca un fitxer (Editor) |
 | ⌘W | Tanca tab |
 | ⌘Shift+W | Arxiva workstream |
 | ⌘L | Barra d'adreces (navegador) |

@@ -21,6 +21,7 @@ extension Notification.Name {
     static let toggleChanges = Notification.Name("factoryfloor.toggleChanges")
     static let saveEditor = Notification.Name("factoryfloor.saveEditor")
     static let saveEditorAs = Notification.Name("factoryfloor.saveEditorAs")
+    static let toggleFileFinder = Notification.Name("factoryfloor.toggleFileFinder")
 }
 
 enum RestorableWorkspaceTab: String, Codable {
@@ -322,6 +323,7 @@ struct TerminalContainerView: View {
     @State private var directoryWatcher: DirectoryWatcher?
     @State private var refreshGeneration = 0
     @State private var refreshDebounceTask: Task<Void, Never>?
+    @State private var fileFinderRequest = 0
     @State private var cachedClaudeCommand: String?
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
@@ -706,7 +708,8 @@ struct TerminalContainerView: View {
                     },
                     onExpandFolder: { path in
                         expandFileTreeFolder(path)
-                    }
+                    },
+                    fileFinderRequest: fileFinderRequest
                 )
                 .id(id)
             } else {
@@ -750,6 +753,12 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .toggleEditor)) { _ in
                 guard isActive else { return }
                 openEditor()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleFileFinder)) { _ in
+                guard isActive else { return }
+                if case .editor = activeTab {
+                    fileFinderRequest += 1
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleChanges)) { _ in
                 guard isActive else { return }
