@@ -308,10 +308,13 @@
 "Report a Bug" = "Fehler melden";
 "Documentation" = "Dokumentation";
 "Request a Feature" = "Funktion vorschlagen";
-"Rebuild" = "Neu bauen";
 "Rerun" = "Erneut ausführen";
 "Start" = "Starten";
 "Stop" = "Stoppen";
+
+"Running setup..." = "Setup läuft...";
+"Setup failed." = "Setup fehlgeschlagen.";
+"Continue to Agent" = "Weiter zum Agenten";
 
 "Restarting..." = "Wird neu gestartet...";
 "Preparing workstream..." = "Workstream wird vorbereitet...";
@@ -348,3 +351,18 @@
 "Fast-forward this branch with the latest changes from origin" = "Diesen Branch mit den neuesten Änderungen von origin aktualisieren";
 "Pull failed" = "Pull fehlgeschlagen";
 "Pulling…" = "Wird gepullt…";
+
+/* Script approval */
+"Teardown" = "Teardown";
+"Approval" = "Genehmigung";
+"Approved" = "Genehmigt";
+"Not approved" = "Nicht genehmigt";
+"Approve" = "Genehmigen";
+"Revoke" = "Widerrufen";
+"Approve scripts from this repository?" = "Skripte aus diesem Repository genehmigen?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "Diese Befehle stammen aus %@ im Repository und werden auf deinem Rechner unter deinem Benutzerkonto ausgeführt.";
+"These commands come from the repository and run on your machine under your user account." = "Diese Befehle stammen aus dem Repository und werden auf deinem Rechner unter deinem Benutzerkonto ausgeführt.";
+"Approval covers this repository until the commands change." = "Die Genehmigung gilt für dieses Repository, bis sich die Befehle ändern.";
+"Approve and Run Setup" = "Genehmigen und Setup ausführen";
+"Skip Setup" = "Setup überspringen";
+"Approve and Start" = "Genehmigen und starten";

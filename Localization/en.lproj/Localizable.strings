@@ -352,3 +352,18 @@
 "Fast-forward this branch with the latest changes from origin" = "Fast-forward this branch with the latest changes from origin";
 "Pull failed" = "Pull failed";
 "Pulling…" = "Pulling…";
+
+/* Script approval */
+"Teardown" = "Teardown";
+"Approval" = "Approval";
+"Approved" = "Approved";
+"Not approved" = "Not approved";
+"Approve" = "Approve";
+"Revoke" = "Revoke";
+"Approve scripts from this repository?" = "Approve scripts from this repository?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "These commands come from %@ in the repository and run on your machine under your user account.";
+"These commands come from the repository and run on your machine under your user account." = "These commands come from the repository and run on your machine under your user account.";
+"Approval covers this repository until the commands change." = "Approval covers this repository until the commands change.";
+"Approve and Run Setup" = "Approve and Run Setup";
+"Skip Setup" = "Skip Setup";
+"Approve and Start" = "Approve and Start";

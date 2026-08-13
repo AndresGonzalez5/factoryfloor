@@ -95,6 +95,8 @@ Add a `.factoryfloor.json` to your project root to automate your workstream life
 
 Scripts run in the workstream directory using your login shell. The `run` script is wrapped in the `ff-run` launcher for automatic port detection.
 
+These commands come from the repository, so Factory Floor asks you to approve them before it runs any of them. The workspace shows each command and the file it was read from, and nothing executes until you approve. Approval is remembered per repository and requested again whenever the commands change. You can withdraw it from the Info tab.
+
 ### Environment Variables
 
 Every workstream terminal has access to:

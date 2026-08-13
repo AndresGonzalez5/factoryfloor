@@ -352,3 +352,18 @@
 "Fast-forward this branch with the latest changes from origin" = "Avança aquesta branca amb els últims canvis de l'origen";
 "Pull failed" = "L'actualització ha fallat";
 "Pulling…" = "Actualitzant…";
+
+/* Script approval */
+"Teardown" = "Desmuntatge";
+"Approval" = "Aprovació";
+"Approved" = "Aprovat";
+"Not approved" = "Sense aprovar";
+"Approve" = "Aprovar";
+"Revoke" = "Revocar";
+"Approve scripts from this repository?" = "Vols aprovar els scripts d'aquest repositori?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "Aquestes ordres provenen de %@ del repositori i s'executen al teu ordinador amb el teu compte d'usuari.";
+"These commands come from the repository and run on your machine under your user account." = "Aquestes ordres provenen del repositori i s'executen al teu ordinador amb el teu compte d'usuari.";
+"Approval covers this repository until the commands change." = "L'aprovació és vàlida per a aquest repositori fins que les ordres canviïn.";
+"Approve and Run Setup" = "Aprovar i executar la configuració inicial";
+"Skip Setup" = "Ometre la configuració inicial";
+"Approve and Start" = "Aprovar i iniciar";

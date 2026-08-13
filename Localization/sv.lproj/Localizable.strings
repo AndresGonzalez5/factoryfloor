@@ -352,3 +352,18 @@
 "Fast-forward this branch with the latest changes from origin" = "Snabbspola denna gren med de senaste ändringarna från origin";
 "Pull failed" = "Hämtning misslyckades";
 "Pulling…" = "Hämtar…";
+
+/* Script approval */
+"Teardown" = "Nedstängning";
+"Approval" = "Godkännande";
+"Approved" = "Godkänd";
+"Not approved" = "Inte godkänd";
+"Approve" = "Godkänn";
+"Revoke" = "Återkalla";
+"Approve scripts from this repository?" = "Godkänn skript från detta repository?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "Dessa kommandon kommer från %@ i repositoryt och körs på din dator med ditt användarkonto.";
+"These commands come from the repository and run on your machine under your user account." = "Dessa kommandon kommer från repositoryt och körs på din dator med ditt användarkonto.";
+"Approval covers this repository until the commands change." = "Godkännandet gäller detta repository till dess att kommandona ändras.";
+"Approve and Run Setup" = "Godkänn och kör konfiguration";
+"Skip Setup" = "Hoppa över konfiguration";
+"Approve and Start" = "Godkänn och starta";

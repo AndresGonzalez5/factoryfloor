@@ -352,3 +352,18 @@
 "Fast-forward this branch with the latest changes from origin" = "Avanza esta rama con los últimos cambios del origen";
 "Pull failed" = "No se pudo actualizar";
 "Pulling…" = "Actualizando…";
+
+/* Script approval */
+"Teardown" = "Desmontaje";
+"Approval" = "Aprobación";
+"Approved" = "Aprobado";
+"Not approved" = "Sin aprobar";
+"Approve" = "Aprobar";
+"Revoke" = "Revocar";
+"Approve scripts from this repository?" = "¿Aprobar los scripts de este repositorio?";
+"These commands come from %@ in the repository and run on your machine under your user account." = "Estas órdenes provienen de %@ del repositorio y se ejecutan en tu ordenador con tu cuenta de usuario.";
+"These commands come from the repository and run on your machine under your user account." = "Estas órdenes provienen del repositorio y se ejecutan en tu ordenador con tu cuenta de usuario.";
+"Approval covers this repository until the commands change." = "La aprobación es válida para este repositorio hasta que las órdenes cambien.";
+"Approve and Run Setup" = "Aprobar y ejecutar la configuración inicial";
+"Skip Setup" = "Omitir la configuración inicial";
+"Approve and Start" = "Aprobar e iniciar";

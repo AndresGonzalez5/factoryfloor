@@ -123,6 +123,13 @@ Scripts are loaded from `.factoryfloor.json` in the project directory:
 Falls back to `.emdash.json`, `conductor.json`, or `.superset/config.json` if not found.
 When using a fallback config, compatibility env vars are injected (e.g. `CONDUCTOR_*`, `EMDASH_*`, `SUPERSET_*`).
 
+These commands come from the repository, so none of them run until the user approves them.
+`ScriptTrust` stores approval per project directory against a SHA-256 fingerprint of the
+commands and their source file, so an edited config has to be approved again. The gate covers
+`setup` (`SetupGateState.resolve`), `run` (`shouldRestoreRunSession` and the Environment tab
+controls), and `teardown` (`ScriptConfig.runTeardown`). Any new execution path for
+repository-provided commands must check `ScriptTrust.isApproved` first.
+
 ### Port detection
 Run scripts are wrapped in the `ff-run` launcher binary (bundled at `Contents/Helpers/ff-run`).
 The launcher monitors the child process tree for listening TCP ports using `libproc` and writes

@@ -45,9 +45,14 @@ struct ScriptConfig {
     }
 
     /// Run the teardown script synchronously in the given directory.
+    /// Does nothing unless the user has approved the project's scripts.
     static func runTeardown(in directory: String, projectDirectory: String) {
         let config = load(from: projectDirectory)
         guard let teardown = config.teardown else { return }
+        guard ScriptTrust.isApproved(config, for: projectDirectory) else {
+            logger.info("Skipping unapproved teardown script for \(projectDirectory, privacy: .public)")
+            return
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: CommandBuilder.userShell)
         process.arguments = ["-lic", teardown]
