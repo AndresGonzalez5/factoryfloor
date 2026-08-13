@@ -120,7 +120,34 @@ function mountDiffEditor(host, file) {
   const diffEditor = monaco.editor.createDiffEditor(host, sharedDiffOptions)
   diffEditor.setModel({ original, modified })
 
+  // handleMouseWheel is off so vertical wheel events bubble to the page (the
+  // page scrolls between files). But that also swallows horizontal gestures, so
+  // route horizontal-dominant wheel events (trackpad swipe, shift+scroll) into
+  // the diff editor's horizontal scroll. Vertical-dominant events are left to
+  // the page so browsing between files keeps working.
+  host.addEventListener('wheel', (e) => {
+    const horizontalIntent = e.shiftKey && e.deltaY !== 0
+    const dominantX = Math.abs(e.deltaX) > Math.abs(e.deltaY)
+    if (!horizontalIntent && !dominantX) return
+    const delta = scaleWheelDelta(
+      horizontalIntent ? e.deltaY : e.deltaX,
+      e.deltaMode
+    )
+    if (delta === 0) return
+    const modifiedEditor = diffEditor.getModifiedEditor()
+    modifiedEditor.setScrollLeft(modifiedEditor.getScrollLeft() + delta)
+    e.preventDefault()
+  })
+
   return { editor: diffEditor, original, modified }
+}
+
+// Normalize a wheel delta to pixels. Line-based (mouse wheels) and page-based
+// deltas arrive unscaled in WKWebView; Monaco expects pixel deltas.
+function scaleWheelDelta(raw, deltaMode) {
+  if (deltaMode === WheelEvent.DOM_DELTA_LINE) return raw * LINE_HEIGHT
+  if (deltaMode === WheelEvent.DOM_DELTA_PAGE) return raw * 100
+  return raw
 }
 
 window.diffAPI = {

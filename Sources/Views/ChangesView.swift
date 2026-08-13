@@ -1,6 +1,7 @@
 // ABOUTME: GitHub-style Changes view showing stacked inline diffs for all of a workstream's edits.
 // ABOUTME: Renders git-derived diffs in Monaco diff editors inside one WKWebView via MonacoDiffBridge.
 
+import AppKit
 import SwiftUI
 
 /// The diff scope shown by the Changes tab.
@@ -37,6 +38,18 @@ struct ChangesView: View {
     /// The leaf currently selected in the sidebar (its full relative path).
     @State private var selectedFilePath: String?
 
+    /// Live width of the files-changed sidebar. Init from UserDefaults so it
+    /// survives tab switches and relaunches; a divider DragGesture commits the
+    /// final value on release (same pattern as PixelAgentsPanelView).
+    @State private var sidebarWidth: Double
+
+    init(workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge) {
+        self.workingDirectory = workingDirectory
+        self.projectDirectory = projectDirectory
+        self.bridge = bridge
+        _sidebarWidth = State(initialValue: Self.loadSidebarWidth())
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             changesToolbar
@@ -52,7 +65,7 @@ struct ChangesView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HSplitView {
+                HStack(spacing: 0) {
                     ChangesFileTreeSidebar(
                         files: diffFiles,
                         selectedFilePath: $selectedFilePath,
@@ -60,7 +73,10 @@ struct ChangesView: View {
                             bridge.scrollToFile(path)
                         }
                     )
-                    .frame(minWidth: 180, idealWidth: 240, maxWidth: 480)
+                    .frame(width: sidebarWidth)
+                    .frame(maxHeight: .infinity)
+
+                    sidebarDivider
 
                     ZStack {
                         MonacoDiffView(bridge: bridge)
@@ -263,6 +279,59 @@ struct ChangesView: View {
         }
     }
 
+    // MARK: - Sidebar width persistence
+
+    /// Clamp bounds for the files-changed sidebar width.
+    private static let changesSidebarMinWidth: Double = 180
+    private static let changesSidebarMaxWidth: Double = 480
+    /// Default width matching the pre-persistence behavior.
+    private static let changesSidebarDefault: Double = 240
+    private static let changesSidebarWidthKey = "factoryfloor.changesSidebarWidth"
+
+    static func loadSidebarWidth() -> Double {
+        let stored = UserDefaults.standard.double(forKey: changesSidebarWidthKey)
+        return stored == 0 ? changesSidebarDefault : clampWidth(stored)
+    }
+
+    static func clampWidth(_ width: Double) -> Double {
+        min(changesSidebarMaxWidth, max(changesSidebarMinWidth, width))
+    }
+
+    /// The resizable divider between the sidebar and the diff review. Drags
+    /// resize the sidebar live; the final width is committed to UserDefaults
+    /// on release so it survives tab switches and relaunches.
+    private var sidebarDivider: some View {
+        Color.clear
+            .frame(width: 9)
+            .overlay(
+                Rectangle()
+                    .fill(.separator)
+                    .frame(width: 1)
+            )
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        sidebarWidth = Self.clampWidth(
+                            Self.loadSidebarWidth() + Double(value.translation.width)
+                        )
+                    }
+                    .onEnded { value in
+                        sidebarWidth = Self.clampWidth(
+                            Self.loadSidebarWidth() + Double(value.translation.width)
+                        )
+                        UserDefaults.standard.set(sidebarWidth, forKey: Self.changesSidebarWidthKey)
+                    }
+            )
+    }
+
     // MARK: - Large-file guard thresholds
 
     /// A file with more than this many changed lines is deferred (Hardening 3).
@@ -304,10 +373,11 @@ struct ChangesView: View {
         buildContents(workDir: workDir, projDir: projDir, mode: mode).payload
     }
 
-    /// Build both the JS `setFiles` payload AND the structured, sorted list of
-    /// changed files in one pass. The sidebar tree is built from `files` while
-    /// the diff webview renders `payload`; sharing one git read keeps the two in
-    /// sync and avoids re-running git for the sidebar.
+    /// Build both the JS `setFiles` payload AND the structured, tree-ordered
+    /// list of changed files in one pass. The sidebar tree is built from `files`
+    /// while the diff webview renders `payload` in that same tree order; sharing
+    /// one git read keeps the two in sync and avoids re-running git for the
+    /// sidebar.
     nonisolated static func buildContents(
         workDir: String,
         projDir: String,
@@ -323,15 +393,15 @@ struct ChangesView: View {
 
         let baseRef = baseRef(workDir: workDir, projDir: projDir, mode: mode)
 
-        // Alphabetical by path — there is no review-driven ordering.
-        let sorted = diffFiles.sorted {
-            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
-        }
+        // Order diffs exactly as the sidebar tree displays them (directories
+        // before files, alphabetical at every level), so the code review scrolls
+        // in lockstep with the "Files changed" sidebar.
+        let orderedFiles = Self.flattenedTreeOrder(diffFiles)
 
         var payload: [[String: Any]] = []
-        payload.reserveCapacity(sorted.count)
+        payload.reserveCapacity(orderedFiles.count)
 
-        for file in sorted {
+        for file in orderedFiles {
             var entry: [String: Any] = [
                 "filePath": file.relativePath,
                 "status": file.status.rawValue,
@@ -364,7 +434,30 @@ struct ChangesView: View {
             payload.append(entry)
         }
 
-        return (payload, sorted)
+        return (payload, orderedFiles)
+    }
+
+    /// Depth-first flattening of the sidebar tree. Directories come before
+    /// sibling files and every level is alphabetical (case-insensitive) —
+    /// identical to how `ChangesFileTreeSidebar` renders its rows, so the diff
+    /// order always matches what the user sees in the sidebar.
+    nonisolated static func flattenedTreeOrder(_ files: [DiffFile]) -> [DiffFile] {
+        var ordered: [DiffFile] = []
+        func visit(_ node: FileTreeNode) {
+            if let file = node.diffFile {
+                ordered.append(file)
+            } else if let children = node.children {
+                for child in children {
+                    visit(child)
+                }
+            }
+        }
+        if let topLevel = FileTreeNode.build(from: files).children {
+            for node in topLevel {
+                visit(node)
+            }
+        }
+        return ordered
     }
 
     // MARK: - Content resolution helpers

@@ -57,12 +57,20 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      /* Stick the header to the top of the viewport while its file's diff is
+         on screen (GitHub-style), so the current file is always identifiable. */
+      position: sticky;
+      top: 0;
+      z-index: 100;
       font-family: -apple-system, system-ui, sans-serif;
       font-size: 12px;
       font-weight: 600;
       padding: 6px 12px;
       color: light-dark(rgba(0, 0, 0, 0.7), rgba(255, 255, 255, 0.7));
-      background: light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.04));
+      /* Opaque (matching the page background) so diff content scrolling
+         underneath is hidden while the header is stuck. */
+      background: var(--vscode-editor-background, light-dark(#ffffff, #1e1e1e));
+      border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
     }
     .diff-header .file-path {
       flex: 1;
