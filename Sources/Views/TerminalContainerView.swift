@@ -934,7 +934,9 @@ struct TerminalContainerView: View {
 
     private func tabShortcut(_ tab: WorkspaceTab) -> String? {
         switch tab {
+        case .info: return "1"
         case .agent: return "\u{21A9}"
+        case .changes: return "D"
         default: return nil
         }
     }
