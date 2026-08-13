@@ -1,6 +1,7 @@
 // ABOUTME: GitHub-style Changes view showing stacked inline diffs for all of a workstream's edits.
 // ABOUTME: Renders git-derived diffs in Monaco diff editors inside one WKWebView via MonacoDiffBridge.
 
+import AppKit
 import SwiftUI
 
 /// The diff scope shown by the Changes tab.
@@ -37,10 +38,17 @@ struct ChangesView: View {
     /// The leaf currently selected in the sidebar (its full relative path).
     @State private var selectedFilePath: String?
 
-    /// Persisted width of the files-changed sidebar, so the split divider
-    /// survives tab switches and app relaunches. Default matches
-    /// `ChangesFileTreeSidebar`'s historical idealWidth.
-    @AppStorage("factoryfloor.changesSidebarWidth") private var changesSidebarWidth: Double = 240
+    /// Live width of the files-changed sidebar. Init from UserDefaults so it
+    /// survives tab switches and relaunches; a divider DragGesture commits the
+    /// final value on release (same pattern as PixelAgentsPanelView).
+    @State private var sidebarWidth: Double
+
+    init(workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge) {
+        self.workingDirectory = workingDirectory
+        self.projectDirectory = projectDirectory
+        self.bridge = bridge
+        _sidebarWidth = State(initialValue: Self.loadSidebarWidth())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,7 +65,7 @@ struct ChangesView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HSplitView {
+                HStack(spacing: 0) {
                     ChangesFileTreeSidebar(
                         files: diffFiles,
                         selectedFilePath: $selectedFilePath,
@@ -65,27 +73,10 @@ struct ChangesView: View {
                             bridge.scrollToFile(path)
                         }
                     )
-                    .frame(
-                        minWidth: Self.changesSidebarMinWidth,
-                        idealWidth: changesSidebarWidth,
-                        maxWidth: Self.changesSidebarMaxWidth
-                    )
-                    .background {
-                        // Track the live pane width and persist it, so the
-                        // divider position survives tab switches and relaunches.
-                        GeometryReader { geo in
-                            Color.clear
-                                .onChange(of: geo.size.width) { _, newWidth in
-                                    let clamped = min(
-                                        Self.changesSidebarMaxWidth,
-                                        max(Self.changesSidebarMinWidth, Double(newWidth))
-                                    )
-                                    if abs(clamped - changesSidebarWidth) >= 1 {
-                                        changesSidebarWidth = clamped
-                                    }
-                                }
-                        }
-                    }
+                    .frame(width: sidebarWidth)
+                    .frame(maxHeight: .infinity)
+
+                    sidebarDivider
 
                     ZStack {
                         MonacoDiffView(bridge: bridge)
@@ -288,11 +279,60 @@ struct ChangesView: View {
         }
     }
 
-    // MARK: - Large-file guard thresholds
+    // MARK: - Sidebar width persistence
 
-    /// Clamp bounds for the persisted files-changed sidebar width.
+    /// Clamp bounds for the files-changed sidebar width.
     private static let changesSidebarMinWidth: Double = 180
     private static let changesSidebarMaxWidth: Double = 480
+    /// Default width matching the pre-persistence behavior.
+    private static let changesSidebarDefault: Double = 240
+    private static let changesSidebarWidthKey = "factoryfloor.changesSidebarWidth"
+
+    static func loadSidebarWidth() -> Double {
+        let stored = UserDefaults.standard.double(forKey: changesSidebarWidthKey)
+        return stored == 0 ? changesSidebarDefault : clampWidth(stored)
+    }
+
+    static func clampWidth(_ width: Double) -> Double {
+        min(changesSidebarMaxWidth, max(changesSidebarMinWidth, width))
+    }
+
+    /// The resizable divider between the sidebar and the diff review. Drags
+    /// resize the sidebar live; the final width is committed to UserDefaults
+    /// on release so it survives tab switches and relaunches.
+    private var sidebarDivider: some View {
+        Color.clear
+            .frame(width: 9)
+            .overlay(
+                Rectangle()
+                    .fill(.separator)
+                    .frame(width: 1)
+            )
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        sidebarWidth = Self.clampWidth(
+                            Self.loadSidebarWidth() + Double(value.translation.width)
+                        )
+                    }
+                    .onEnded { value in
+                        sidebarWidth = Self.clampWidth(
+                            Self.loadSidebarWidth() + Double(value.translation.width)
+                        )
+                        UserDefaults.standard.set(sidebarWidth, forKey: Self.changesSidebarWidthKey)
+                    }
+            )
+    }
+
+    // MARK: - Large-file guard thresholds
 
     /// A file with more than this many changed lines is deferred (Hardening 3).
     static let largeFileLineThreshold = 1500
