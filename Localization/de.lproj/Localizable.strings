@@ -101,6 +101,9 @@
 "Editor" = "Editor";
 "New Editor (\u2318E)" = "Neuer Editor (\u2318E)";
 "Find File" = "Datei suchen";
+"Copy File Path" = "Dateipfad kopieren";
+"Copied: %@" = "Kopiert: %@";
+"No file open" = "Keine Datei geöffnet";
 "Find File (\u2318P)" = "Datei suchen (\u2318P)";
 "Search files by name" = "Dateien nach Namen durchsuchen";
 "No files found" = "Keine Dateien gefunden";

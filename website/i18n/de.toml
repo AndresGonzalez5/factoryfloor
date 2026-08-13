@@ -159,6 +159,8 @@ other = "Workstreams durchschalten"
 other = "Projekte durchschalten"
 [sc_editor]
 other = "Neuer Editor"
+[sc_copy_file_path]
+other = "Dateipfad kopieren (Editor)"
 [sc_find_file]
 other = "Finde Datei"
 [sc_save]

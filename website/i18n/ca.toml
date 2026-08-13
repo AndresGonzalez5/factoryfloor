@@ -159,6 +159,8 @@ other = "Cicla workstreams"
 other = "Cicla projectes"
 [sc_editor]
 other = "Nou Editor"
+[sc_copy_file_path]
+other = "Copia la ruta del fitxer (Editor)"
 [sc_find_file]
 other = "Cerca un fitxer"
 [sc_save]

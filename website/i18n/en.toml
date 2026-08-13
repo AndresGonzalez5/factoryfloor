@@ -159,6 +159,8 @@ other = "Cycle workstreams"
 other = "Cycle projects"
 [sc_editor]
 other = "New Editor"
+[sc_copy_file_path]
+other = "Copy File Path (Editor)"
 [sc_find_file]
 other = "Find File (Editor)"
 [sc_save]

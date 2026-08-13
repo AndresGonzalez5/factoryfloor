@@ -168,6 +168,7 @@ Factory Floor ist tastaturorientiert. Hier ist alles.
 | ⌘B | Neuer Browser |
 | ⌘J | Pixel-Agenten ein-/ausblenden |
 | ⌘P | Datei suchen (Editor) |
+| ⌘⇧C | Dateipfad kopieren (Editor) |
 | ⌘W | Tab schließen |
 | ⌘Shift+W | Workstream archivieren |
 | ⌘L | Adressleiste (Browser) |

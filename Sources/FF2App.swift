@@ -360,6 +360,11 @@ struct FF2App: App {
                         NotificationCenter.default.post(name: .toggleFileFinder, object: nil)
                     }
                     .keyboardShortcut("p", modifiers: .command)
+
+                    Button("Copy File Path") {
+                        NotificationCenter.default.post(name: .copyEditorPath, object: nil)
+                    }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
                 }
 
                 Button("Changes") {

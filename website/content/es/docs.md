@@ -168,6 +168,7 @@ Factory Floor prioriza el teclado. Aquí está todo.
 | ⌘B | Nuevo navegador |
 | ⌘J | Mostrar/ocultar agentes píxel |
 | ⌘P | Buscar archivo (Editor) |
+| ⌘⇧C | Copiar ruta del archivo (Editor) |
 | ⌘W | Cerrar tab |
 | ⌘Shift+W | Archivar workstream |
 | ⌘L | Barra de direcciones (navegador) |

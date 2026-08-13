@@ -101,6 +101,9 @@
 "Editor" = "Redigerare";
 "New Editor (\u2318E)" = "Ny redigerare (\u2318E)";
 "Find File" = "Sök fil";
+"Copy File Path" = "Kopiera filsökväg";
+"Copied: %@" = "Kopierad: %@";
+"No file open" = "Ingen fil öppen";
 "Find File (\u2318P)" = "Sök fil (\u2318P)";
 "Search files by name" = "Sök filer efter namn";
 "No files found" = "Inga filer hittades";

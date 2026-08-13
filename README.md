@@ -135,6 +135,7 @@ Every workstream terminal has access to:
 | `Cmd+B` | New Browser |
 | `Cmd+O` | New Editor |
 | `Cmd+P` | Find File (Editor) |
+| `Cmd+Shift+C` | Copy File Path (Editor) |
 | `Cmd+J` | Toggle pixel agents |
 | `Cmd+S` | Save (Editor) |
 | `Cmd+Shift+S` | Save As (Editor) |

@@ -152,6 +152,8 @@ other = "Växla workstreams"
 other = "Växla projekt"
 [sc_editor]
 other = "Ny Editor"
+[sc_copy_file_path]
+other = "Kopiera filsökväg (Editor)"
 [sc_find_file]
 other = "Sök fil"
 [sc_save]

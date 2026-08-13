@@ -168,6 +168,7 @@ Factory Floor prioritza el teclat. Aquí tens tot.
 | ⌘B | Nou navegador |
 | ⌘J | Mostra/oculta agents píxel |
 | ⌘P | Cerca un fitxer (Editor) |
+| ⌘⇧C | Copia la ruta del fitxer (Editor) |
 | ⌘W | Tanca tab |
 | ⌘Shift+W | Arxiva workstream |
 | ⌘L | Barra d'adreces (navegador) |
