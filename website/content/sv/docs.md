@@ -167,6 +167,8 @@ Factory Floor är tangentbord-först. Här är allt.
 | ⌘T | Ny Terminal |
 | ⌘B | Ny Browser |
 | ⌘J | Visa/dölj pixel-agenter |
+| ⌘P | Sök fil (Editor) |
+| ⌘⇧C | Kopiera filsökväg (Editor) |
 | ⌘W | Stäng tab |
 | ⌘Shift+W | Arkivera workstream |
 | ⌘L | Adressfält (browser) |

@@ -355,6 +355,18 @@ struct FF2App: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
+                if isEditorActive {
+                    Button("Find File") {
+                        NotificationCenter.default.post(name: .toggleFileFinder, object: nil)
+                    }
+                    .keyboardShortcut("p", modifiers: .command)
+
+                    Button("Copy File Path") {
+                        NotificationCenter.default.post(name: .copyEditorPath, object: nil)
+                    }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                }
+
                 Button("Changes") {
                     NotificationCenter.default.post(name: .toggleChanges, object: nil)
                 }

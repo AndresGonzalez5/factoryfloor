@@ -153,6 +153,10 @@ other = "Recorrer workstreams"
 other = "Recorrer proyectos"
 [sc_editor]
 other = "Nuevo Editor"
+[sc_copy_file_path]
+other = "Copiar ruta del archivo (Editor)"
+[sc_find_file]
+other = "Buscar archivo"
 [sc_save]
 other = "Guardar (Editor)"
 [sc_save_as]

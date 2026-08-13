@@ -14,6 +14,9 @@ struct EditorView: View {
     @Binding var isDirtyState: Bool
     var onFileChanged: ((String?) -> Void)?
     var onExpandFolder: ((String) -> Void)?
+    /// Incremented by the workspace when the user presses Cmd+P while this
+    /// editor tab is active; each change opens the file finder.
+    var fileFinderRequest: Int = 0
 
     // Current file state
     @State private var currentFilePath: String?
@@ -22,6 +25,16 @@ struct EditorView: View {
 
     /// File tree visibility
     @State private var showFileTree = true
+
+    // File finder (quick open)
+    @State private var isFinderOpen = false
+    @State private var finderQuery = ""
+    @State private var finderSelection: Int?
+    @State private var fileIndex: [FileFinder.Entry] = []
+    @State private var finderResults: [String] = []
+    @State private var isScanningFiles = false
+    @State private var finderKeyMonitor: Any?
+    @FocusState private var finderFieldFocused: Bool
 
     // Save confirmation for file switching
     @State private var pendingFilePath: String?
@@ -37,16 +50,22 @@ struct EditorView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if showFileTree {
-                fileTreePanel
-                    .frame(width: 220)
-                Divider()
+        ZStack(alignment: .top) {
+            HStack(spacing: 0) {
+                if showFileTree {
+                    fileTreePanel
+                        .frame(width: 220)
+                    Divider()
+                }
+                VStack(spacing: 0) {
+                    editorToolbar
+                    editorPanel
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
-            VStack(spacing: 0) {
-                editorToolbar
-                editorPanel
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if isFinderOpen {
+                finderOverlay
+                    .padding(.top, 44)
             }
         }
         .onAppear {
@@ -55,6 +74,16 @@ struct EditorView: View {
             } else if fileLoaded {
                 bridge.switchModel(modelId: modelId)
             }
+        }
+        .onDisappear {
+            closeFileFinder()
+        }
+        .onChange(of: fileFinderRequest) { _, _ in
+            openFileFinder()
+        }
+        .onChange(of: finderQuery) { _, newQuery in
+            print("[FF] query -> \(newQuery)")
+            refreshFinderResults()
         }
         .alert(
             Text(String(
@@ -106,6 +135,15 @@ struct EditorView: View {
             }
             .buttonStyle(.plain)
             .help("Toggle file tree")
+
+            Button {
+                openFileFinder()
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(isFinderOpen ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(NSLocalizedString("Find File (\u{2318}P)", comment: ""))
 
             if let currentFilePath {
                 Text((currentFilePath as NSString).lastPathComponent)
@@ -161,6 +199,242 @@ struct EditorView: View {
                 .background(.background)
             }
         }
+    }
+
+    // MARK: - File Finder
+
+    private var finderOverlay: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                TextField(
+                    NSLocalizedString("Search files by name", comment: ""),
+                    text: $finderQuery
+                )
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .focused($finderFieldFocused)
+                if isScanningFiles {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if finderResults.isEmpty {
+                if isScanningFiles {
+                    Text(NSLocalizedString("Scanning files…", comment: ""))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                } else if !finderQuery.isEmpty {
+                    Text(NSLocalizedString("No files found", comment: ""))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                }
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            // Rows are identified by their POSITION, so SwiftUI
+                            // can never render stale content for an index: row
+                            // content is a pure function of the current array.
+                            // (Using the path string as ForEach id AND .id() on
+                            // rows caused two competing identity systems and
+                            // desynced rendering in the lazy container.)
+                            ForEach(Array(finderResults.enumerated()), id: \.offset) { index, path in
+                                finderRow(path: path, index: index)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .onChange(of: finderSelection) { _, newValue in
+                        guard let newValue else { return }
+                        withAnimation(nil) {
+                            proxy.scrollTo(newValue, anchor: .center)
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+            // Debug telemetry: makes the query/results state visible so any
+            // divergence between what is typed and what is searched is obvious.
+            Text("'\(finderQuery)' -> \(finderResults.count) results" +
+                 (finderResults.first.map { " | \($0)" } ?? ""))
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 4)
+        }
+        .frame(width: 480)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(.separator, lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+
+    private func finderRow(path: String, index: Int) -> some View {
+        let isSelected = index == finderSelection
+        let name = (path as NSString).lastPathComponent
+        let dir = (path as NSString).deletingLastPathComponent
+        let icon = FileTypeIcon.icon(for: name)
+
+        return HStack(spacing: 6) {
+            Image(systemName: icon.symbolName)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(name)
+                .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+                .lineLimit(1)
+            if !dir.isEmpty {
+                Text(dir)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .background(isSelected ? Color.accentColor.opacity(0.18) : .clear)
+        .onTapGesture {
+            selectFinderResult(at: index)
+        }
+    }
+
+    private func openFileFinder() {
+        isFinderOpen = true
+        finderQuery = ""
+        finderResults = []
+        finderSelection = nil
+        installFinderKeyMonitor()
+        DispatchQueue.main.async {
+            finderFieldFocused = true
+        }
+        scanFinderFiles()
+    }
+
+    private func closeFileFinder() {
+        isFinderOpen = false
+        finderFieldFocused = false
+        if let monitor = finderKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            finderKeyMonitor = nil
+        }
+    }
+
+    /// The finder's query is driven entirely by this local key monitor, not by
+    /// the TextField's first-responder editing. This makes the query a faithful
+    /// replay of the exact keys pressed regardless of focus state, field editor
+    /// quirks, or SwiftUI binding timing — the field is a pure display.
+    /// arrow/return/escape keys are intercepted here (field editor would consume
+    /// them before SwiftUI's focus system).
+    private func installFinderKeyMonitor() {
+        guard finderKeyMonitor == nil else { return }
+        finderKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard self.isFinderOpen else { return event }
+            if let chars = event.charactersIgnoringModifiers {
+                switch chars {
+                case "\u{1b}": // Escape
+                    self.closeFileFinder()
+                    return nil
+                case "\r", "\n": // Return
+                    self.openSelectedFinderResult()
+                    return nil
+                case "\u{F700}", "\u{F701}": // Up / Down arrow
+                    self.moveFinderSelection(chars == "\u{F700}" ? -1 : 1)
+                    return nil
+                case "\u{7f}", "\u{08}": // Delete / Backspace
+                    if !self.finderQuery.isEmpty {
+                        self.finderQuery.removeLast()
+                    }
+                    return nil
+                default:
+                    let flags = event.modifierFlags
+                    if flags.contains(.command), chars.lowercased() == "v" {
+                        self.appendPasteboardText()
+                        return nil
+                    }
+                    // Plain printable characters: append and never let them
+                    // reach the field editor (which would double-insert).
+                    if flags.intersection([.command, .option, .control]).isEmpty, !chars.isEmpty {
+                        self.finderQuery.append(chars)
+                        return nil
+                    }
+                    return event
+                }
+            }
+            return event
+        }
+    }
+
+    private func appendPasteboardText() {
+        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        finderQuery.append(text.replacingOccurrences(of: "\n", with: " "))
+    }
+
+    private func scanFinderFiles() {
+        isScanningFiles = true
+        fileIndex = []
+        finderResults = []
+        let root = workingDirectory
+        let ignored = gitStatus
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scanned = FileFinder.scanFiles(at: root)
+            let visible = scanned.filter { !ignored.isIgnored($0.path) }
+            DispatchQueue.main.async {
+                self.fileIndex = visible
+                self.isScanningFiles = false
+                print("[FF] scan done: \(visible.count) files")
+                self.refreshFinderResults()
+            }
+        }
+    }
+
+    /// Synchronously recompute the displayed results from the current query.
+    /// Matching is allocation-free and fast enough (milliseconds) that this can
+    /// run on every keystroke; the displayed list can never be stale.
+    private func refreshFinderResults() {
+        let results = FileFinder.results(matching: finderQuery, in: fileIndex)
+        finderResults = results
+        finderSelection = results.isEmpty ? nil : 0
+        print("[FF] refresh(\(finderQuery)) -> \(results.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
+    }
+
+    private func moveFinderSelection(_ delta: Int) {
+        guard !finderResults.isEmpty else { return }
+        let current = finderSelection ?? (delta > 0 ? -1 : finderResults.count)
+        finderSelection = min(max(current + delta, 0), finderResults.count - 1)
+    }
+
+    private func openSelectedFinderResult() {
+        // Results are always current (recomputed synchronously on every
+        // keystroke); never re-compute here — refreshFinderResults() resets the
+        // selection to 0 and would ignore a selection moved with the arrows.
+        guard let index = finderSelection, index < finderResults.count else { return }
+        selectFinderResult(at: index)
+    }
+
+    private func selectFinderResult(at index: Int) {
+        guard index < finderResults.count else { return }
+        let path = finderResults[index]
+        closeFileFinder()
+        handleFileSelection(path)
     }
 
     // MARK: - Navigation

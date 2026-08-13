@@ -100,6 +100,14 @@
 "Browser" = "Navegador";
 "Editor" = "Editor";
 "New Editor (\u2318E)" = "Nuevo editor (\u2318E)";
+"Find File" = "Buscar archivo";
+"Copy File Path" = "Copiar ruta del archivo";
+"Copied: %@" = "Copiado: %@";
+"No file open" = "No hay ningún archivo abierto";
+"Find File (\u2318P)" = "Buscar archivo (\u2318P)";
+"Search files by name" = "Buscar archivos por nombre";
+"No files found" = "No se encontraron archivos";
+"Scanning files…" = "Escaneando archivos…";
 "Open File" = "Abrir archivo";
 "Toggle file tree" = "Mostrar/ocultar árbol de archivos";
 "Select a file to edit" = "Selecciona un archivo para editar";

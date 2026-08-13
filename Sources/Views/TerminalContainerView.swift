@@ -21,6 +21,8 @@ extension Notification.Name {
     static let toggleChanges = Notification.Name("factoryfloor.toggleChanges")
     static let saveEditor = Notification.Name("factoryfloor.saveEditor")
     static let saveEditorAs = Notification.Name("factoryfloor.saveEditorAs")
+    static let toggleFileFinder = Notification.Name("factoryfloor.toggleFileFinder")
+    static let copyEditorPath = Notification.Name("factoryfloor.copyEditorPath")
 }
 
 enum RestorableWorkspaceTab: String, Codable {
@@ -322,6 +324,9 @@ struct TerminalContainerView: View {
     @State private var directoryWatcher: DirectoryWatcher?
     @State private var refreshGeneration = 0
     @State private var refreshDebounceTask: Task<Void, Never>?
+    @State private var fileFinderRequest = 0
+    @State private var copyFeedback: String?
+    @State private var copyFeedbackTask: Task<Void, Never>?
     @State private var cachedClaudeCommand: String?
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
@@ -706,7 +711,8 @@ struct TerminalContainerView: View {
                     },
                     onExpandFolder: { path in
                         expandFileTreeFolder(path)
-                    }
+                    },
+                    fileFinderRequest: fileFinderRequest
                 )
                 .id(id)
             } else {
@@ -750,6 +756,16 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .toggleEditor)) { _ in
                 guard isActive else { return }
                 openEditor()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleFileFinder)) { _ in
+                guard isActive else { return }
+                if case .editor = activeTab {
+                    fileFinderRequest += 1
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .copyEditorPath)) { _ in
+                guard isActive else { return }
+                copyOpenFileReference()
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleChanges)) { _ in
                 guard isActive else { return }
@@ -911,6 +927,50 @@ struct TerminalContainerView: View {
                     surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
                 }
             }
+            .overlay(alignment: .bottom) {
+                if let copyFeedback {
+                    Text(copyFeedback)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(.regularMaterial, in: Capsule())
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(.separator, lineWidth: 0.5)
+                        )
+                        .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
+                        .padding(.bottom, 14)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: copyFeedback)
+    }
+
+    // MARK: - Copy file reference
+
+    /// Cmd+Shift+C: copy the path of the file open in the active editor tab so
+    /// it can be pasted straight into the Coding Agent conversation.
+    private func copyOpenFileReference() {
+        guard case let .editor(id) = activeTab else { return }
+        guard let path = editorFilePaths[id] else {
+            showCopyFeedback(NSLocalizedString("No file open", comment: ""))
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+        showCopyFeedback(String(format: NSLocalizedString("Copied: %@", comment: ""), path))
+    }
+
+    private func showCopyFeedback(_ message: String) {
+        copyFeedbackTask?.cancel()
+        copyFeedback = message
+        copyFeedbackTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.8))
+            guard !Task.isCancelled else { return }
+            copyFeedback = nil
+        }
     }
 
     // MARK: - Tab management
