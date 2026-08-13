@@ -37,6 +37,11 @@ struct ChangesView: View {
     /// The leaf currently selected in the sidebar (its full relative path).
     @State private var selectedFilePath: String?
 
+    /// Persisted width of the files-changed sidebar, so the split divider
+    /// survives tab switches and app relaunches. Default matches
+    /// `ChangesFileTreeSidebar`'s historical idealWidth.
+    @AppStorage("factoryfloor.changesSidebarWidth") private var changesSidebarWidth: Double = 240
+
     var body: some View {
         VStack(spacing: 0) {
             changesToolbar
@@ -60,7 +65,27 @@ struct ChangesView: View {
                             bridge.scrollToFile(path)
                         }
                     )
-                    .frame(minWidth: 180, idealWidth: 240, maxWidth: 480)
+                    .frame(
+                        minWidth: Self.changesSidebarMinWidth,
+                        idealWidth: changesSidebarWidth,
+                        maxWidth: Self.changesSidebarMaxWidth
+                    )
+                    .background {
+                        // Track the live pane width and persist it, so the
+                        // divider position survives tab switches and relaunches.
+                        GeometryReader { geo in
+                            Color.clear
+                                .onChange(of: geo.size.width) { _, newWidth in
+                                    let clamped = min(
+                                        Self.changesSidebarMaxWidth,
+                                        max(Self.changesSidebarMinWidth, Double(newWidth))
+                                    )
+                                    if abs(clamped - changesSidebarWidth) >= 1 {
+                                        changesSidebarWidth = clamped
+                                    }
+                                }
+                        }
+                    }
 
                     ZStack {
                         MonacoDiffView(bridge: bridge)
@@ -264,6 +289,10 @@ struct ChangesView: View {
     }
 
     // MARK: - Large-file guard thresholds
+
+    /// Clamp bounds for the persisted files-changed sidebar width.
+    private static let changesSidebarMinWidth: Double = 180
+    private static let changesSidebarMaxWidth: Double = 480
 
     /// A file with more than this many changed lines is deferred (Hardening 3).
     static let largeFileLineThreshold = 1500
