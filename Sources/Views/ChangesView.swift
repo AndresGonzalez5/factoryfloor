@@ -373,10 +373,11 @@ struct ChangesView: View {
         buildContents(workDir: workDir, projDir: projDir, mode: mode).payload
     }
 
-    /// Build both the JS `setFiles` payload AND the structured, sorted list of
-    /// changed files in one pass. The sidebar tree is built from `files` while
-    /// the diff webview renders `payload`; sharing one git read keeps the two in
-    /// sync and avoids re-running git for the sidebar.
+    /// Build both the JS `setFiles` payload AND the structured, tree-ordered
+    /// list of changed files in one pass. The sidebar tree is built from `files`
+    /// while the diff webview renders `payload` in that same tree order; sharing
+    /// one git read keeps the two in sync and avoids re-running git for the
+    /// sidebar.
     nonisolated static func buildContents(
         workDir: String,
         projDir: String,
@@ -392,15 +393,15 @@ struct ChangesView: View {
 
         let baseRef = baseRef(workDir: workDir, projDir: projDir, mode: mode)
 
-        // Alphabetical by path — there is no review-driven ordering.
-        let sorted = diffFiles.sorted {
-            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
-        }
+        // Order diffs exactly as the sidebar tree displays them (directories
+        // before files, alphabetical at every level), so the code review scrolls
+        // in lockstep with the "Files changed" sidebar.
+        let orderedFiles = Self.flattenedTreeOrder(diffFiles)
 
         var payload: [[String: Any]] = []
-        payload.reserveCapacity(sorted.count)
+        payload.reserveCapacity(orderedFiles.count)
 
-        for file in sorted {
+        for file in orderedFiles {
             var entry: [String: Any] = [
                 "filePath": file.relativePath,
                 "status": file.status.rawValue,
@@ -433,7 +434,30 @@ struct ChangesView: View {
             payload.append(entry)
         }
 
-        return (payload, sorted)
+        return (payload, orderedFiles)
+    }
+
+    /// Depth-first flattening of the sidebar tree. Directories come before
+    /// sibling files and every level is alphabetical (case-insensitive) —
+    /// identical to how `ChangesFileTreeSidebar` renders its rows, so the diff
+    /// order always matches what the user sees in the sidebar.
+    nonisolated static func flattenedTreeOrder(_ files: [DiffFile]) -> [DiffFile] {
+        var ordered: [DiffFile] = []
+        func visit(_ node: FileTreeNode) {
+            if let file = node.diffFile {
+                ordered.append(file)
+            } else if let children = node.children {
+                for child in children {
+                    visit(child)
+                }
+            }
+        }
+        if let topLevel = FileTreeNode.build(from: files).children {
+            for node in topLevel {
+                visit(node)
+            }
+        }
+        return ordered
     }
 
     // MARK: - Content resolution helpers
