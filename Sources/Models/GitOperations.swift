@@ -885,6 +885,20 @@ enum GitOperations {
         return String(data: data, encoding: .utf8)
     }
 
+    /// Validates a candidate workstream name for use as a git branch name.
+    /// Follows git check-ref-format rules; empty names are invalid (callers
+    /// treat empty as "generate a random name instead").
+    static func isValidBranchName(_ name: String) -> Bool {
+        guard !name.isEmpty else { return false }
+        let forbiddenCharacters = CharacterSet(charactersIn: " ~^:?*[\\")
+        if name.rangeOfCharacter(from: forbiddenCharacters) != nil { return false }
+        if name.contains("..") || name.contains("@{") || name.contains("//") { return false }
+        if name.hasPrefix("-") { return false }
+        if name.hasSuffix(".") || name.hasSuffix("/") || name.hasSuffix(".lock") { return false }
+        if name.unicodeScalars.contains(where: { $0.value < 0x20 }) { return false }
+        return true
+    }
+
     private static func sanitize(_ name: String) -> String {
         var result = name.replacingOccurrences(of: "/", with: "--")
             .replacingOccurrences(of: " ", with: "-")

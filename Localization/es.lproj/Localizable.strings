@@ -74,6 +74,15 @@
 "Rename" = "Renombrar";
 "Rename…" = "Renombrar…";
 
+/* Workstream creation */
+"New Workstream" = "Nuevo flujo de trabajo";
+"Project" = "Proyecto";
+"Workstream name" = "Nombre del flujo de trabajo";
+"Leave blank for a random name." = "Déjalo en blanco para usar un nombre aleatorio.";
+"This becomes the branch and worktree name." = "Este nombre se usa para la rama y el árbol de trabajo.";
+"That name isn't valid for a git branch." = "Ese nombre no es válido para una rama de git.";
+"A workstream with this name already exists." = "Ya existe un flujo de trabajo con ese nombre.";
+
 /* Sheets */
 "Add Project" = "Añadir proyecto";
 "Directory" = "Directorio";
