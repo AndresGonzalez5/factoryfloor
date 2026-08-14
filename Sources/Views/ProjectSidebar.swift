@@ -52,6 +52,12 @@ struct ProjectSidebar: View {
     @State private var cachedWorkstreamIndex: [UUID: (Int, Int)] = [:]
     @State private var showWorktreeError = false
     @State private var showNotGitRepoError = false
+    @State private var showingNewWorkstreamName = false
+    @State private var newWorkstreamName = ""
+    @State private var newWorkstreamError = ""
+    @State private var newWorkstreamPlaceholder = ""
+    @State private var pendingWorkstreamProjectID: UUID?
+    @State private var pendingWorkstreamBypass: Bool?
 
     private func recomputeSortedIDs() -> [UUID] {
         guard let space = UUID(uuidString: currentSpaceID) else {
@@ -369,6 +375,20 @@ struct ProjectSidebar: View {
                     onCancel: { showingNewProjectName = false }
                 )
             }
+            .sheet(isPresented: $showingNewWorkstreamName) {
+                NewWorkstreamSheet(
+                    name: $newWorkstreamName,
+                    error: $newWorkstreamError,
+                    projectName: pendingWorkstreamProjectID.flatMap { id in projects.first(where: { $0.id == id })?.name } ?? "",
+                    placeholder: newWorkstreamPlaceholder,
+                    onAdd: { createWorkstream() },
+                    onCancel: {
+                        showingNewWorkstreamName = false
+                        pendingWorkstreamProjectID = nil
+                        pendingWorkstreamBypass = nil
+                    }
+                )
+            }
             .onReceive(NotificationCenter.default.publisher(for: .addProject)) { _ in
                 showingAddProjectChoice = true
             }
@@ -487,10 +507,48 @@ struct ProjectSidebar: View {
         logger.warning("[FF] addWorkstream: is git repo")
 
         let existingNames = Set(project.workstreams.map(\.name))
-        let name = NameGenerator.generate(avoiding: existingNames)
-        logger.warning("[FF] addWorkstream: generated name=\(name, privacy: .public)")
+        newWorkstreamName = ""
+        newWorkstreamError = ""
+        newWorkstreamPlaceholder = NameGenerator.generate(avoiding: existingNames)
+        pendingWorkstreamProjectID = projectID
+        pendingWorkstreamBypass = bypassPermissions
+        showingNewWorkstreamName = true
+    }
 
-        let bypass = bypassPermissions ?? defaultBypass
+    private func createWorkstream() {
+        guard let projectID = pendingWorkstreamProjectID else { return }
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
+            showingNewWorkstreamName = false
+            return
+        }
+        let project = projects[index]
+        let existingNames = Set(project.workstreams.map(\.name))
+
+        let typedName = newWorkstreamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typedName.isEmpty {
+            guard GitOperations.isValidBranchName(typedName) else {
+                newWorkstreamError = NSLocalizedString(
+                    "That name isn't valid for a git branch.",
+                    comment: "Error when the workstream name is not a valid git branch name"
+                )
+                return
+            }
+            guard !existingNames.contains(typedName) else {
+                newWorkstreamError = NSLocalizedString(
+                    "A workstream with this name already exists.",
+                    comment: "Error when the workstream name collides with an existing workstream"
+                )
+                return
+            }
+        }
+
+        let bypass = pendingWorkstreamBypass ?? defaultBypass
+        let name = typedName.isEmpty ? NameGenerator.generate(avoiding: existingNames) : typedName
+        logger.warning("[FF] createWorkstream: \(typedName.isEmpty ? "generated" : "user") name=\(name, privacy: .public)")
+
+        showingNewWorkstreamName = false
+        pendingWorkstreamProjectID = nil
+        pendingWorkstreamBypass = nil
         let workstream = Workstream(name: name, worktreePath: nil, bypassPermissions: bypass)
         expandedProjects.insert(projectID)
         NotificationCenter.default.post(
@@ -1116,6 +1174,69 @@ private struct AddProjectChoiceSheet: View {
         }
         .padding(20)
         .frame(width: 380)
+    }
+}
+
+private struct NewWorkstreamSheet: View {
+    @Binding var name: String
+    @Binding var error: String
+    let projectName: String
+    let placeholder: String
+    let onAdd: () -> Void
+    let onCancel: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("New Workstream")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Project")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(projectName)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            TextField("Workstream name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
+                .onSubmit { onAdd() }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Leave blank for a random name.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(placeholder)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                Text("This becomes the branch and worktree name.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !error.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Create", action: onAdd)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+        .onAppear { isFocused = true }
     }
 }
 
