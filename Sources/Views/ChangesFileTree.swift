@@ -167,6 +167,10 @@ private struct ChangesFileTreeRow: View {
 private struct ChangesFileLeafRow: View {
     let node: FileTreeNode
 
+    @State private var isHovering = false
+    /// Brief checkmark confirmation after a copy, cleared by a delayed reset.
+    @State private var copied = false
+
     private var file: DiffFile? { node.diffFile }
 
     var body: some View {
@@ -175,9 +179,47 @@ private struct ChangesFileLeafRow: View {
             Text(node.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            copyButton
             Spacer(minLength: 4)
             counts
         }
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+
+    /// GitHub-PR-style copy control: reveals on hover, copies the file's full
+    /// relative path, and flashes a checkmark as confirmation.
+    @ViewBuilder
+    private var copyButton: some View {
+        Group {
+            if copied {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.green)
+                    .help(Text("File path copied"))
+                    .accessibilityLabel(Text("File path copied"))
+            } else {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(node.id, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        copied = false
+                    }
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(Text("Copy File Path"))
+                .accessibilityLabel(Text("Copy File Path"))
+            }
+        }
+        .opacity(isHovering || copied ? 1 : 0)
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+        .animation(.easeInOut(duration: 0.12), value: copied)
     }
 
     @ViewBuilder
