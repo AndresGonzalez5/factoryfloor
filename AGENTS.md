@@ -187,7 +187,6 @@ Current shortcuts:
 - **Cmd+B**: New Browser (starts the dev server)
 - **Cmd+O**: New Editor
 - **Cmd+P**: Find File (Editor)
-- **Cmd+Shift+C**: Copy File Path (Editor)
 - **Cmd+S**: Save (Editor)
 - **Cmd+Shift+S**: Save As (Editor)
 - **Cmd+W**: Close tab
@@ -197,7 +196,7 @@ Current shortcuts:
 - **Cmd+[/]**: Cycle workstreams
 - **Cmd+Up/Down**: Cycle projects
 - **Cmd+0**: Back to project
-- **Cmd+Option+S**: Toggle sidebar
+- **Cmd+Shift+C**: Toggle sidebar
 - **Cmd+Option+B**: External browser
 - **Cmd+Option+T**: External terminal
 - **Cmd+/**: Help

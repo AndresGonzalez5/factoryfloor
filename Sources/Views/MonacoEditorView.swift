@@ -89,6 +89,10 @@ class EditorWebView: WKWebView {
         switch chars {
         case "s", "w", "t", "b", "o", "d", "p":
             return false
+        case "c":
+            if event.modifierFlags.contains(.shift) {
+                return false
+            }
         case "[", "]":
             return false
         case "\r":

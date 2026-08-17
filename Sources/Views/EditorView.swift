@@ -22,6 +22,7 @@ struct EditorView: View {
     @State private var currentFilePath: String?
     @State private var fileLoaded = false
     @State private var loadError: String?
+    @State private var filePathCopied = false
 
     /// File tree visibility
     @State private var showFileTree = true
@@ -146,10 +147,13 @@ struct EditorView: View {
             .help(NSLocalizedString("Find File (\u{2318}P)", comment: ""))
 
             if let currentFilePath {
-                Text((currentFilePath as NSString).lastPathComponent)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text((currentFilePath as NSString).lastPathComponent)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    copyFilePathButton
+                }
             }
 
             Spacer()
@@ -157,6 +161,39 @@ struct EditorView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(.bar)
+    }
+
+    /// Copies the current file's relative path and flashes a checkmark as
+    /// confirmation.
+    @ViewBuilder
+    private var copyFilePathButton: some View {
+        Group {
+            if filePathCopied {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.green)
+                    .help(Text("File path copied"))
+                    .accessibilityLabel(Text("File path copied"))
+            } else {
+                Button {
+                    guard let path = currentFilePath else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(path, forType: .string)
+                    filePathCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        filePathCopied = false
+                    }
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(Text("Copy File Path"))
+                .accessibilityLabel(Text("Copy File Path"))
+            }
+        }
+        .animation(.easeInOut(duration: 0.12), value: filePathCopied)
     }
 
     // MARK: - File Tree Panel

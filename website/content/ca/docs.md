@@ -151,7 +151,7 @@ Factory Floor prioritza el teclat. Aquí tens tot.
 | ⌘Shift+N | Nou projecte |
 | ⌘, | Configuració |
 | ⌘/ | Ajuda |
-| ⌘Option+S | Commuta barra lateral |
+| ⌘Shift+C | Commuta barra lateral |
 
 #### Workstream {#workstream}
 
@@ -168,7 +168,6 @@ Factory Floor prioritza el teclat. Aquí tens tot.
 | ⌘B | Nou navegador (inicia el servidor de desenvolupament) |
 | ⌘J | Mostra/oculta agents píxel |
 | ⌘P | Cerca un fitxer (Editor) |
-| ⌘⇧C | Copia la ruta del fitxer (Editor) |
 | ⌘W | Tanca tab |
 | ⌘Shift+W | Arxiva workstream |
 | ⌘L | Barra d'adreces (navegador) |

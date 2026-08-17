@@ -151,7 +151,7 @@ Factory Floor prioriza el teclado. Aquí está todo.
 | ⌘Shift+N | Nuevo proyecto |
 | ⌘, | Ajustes |
 | ⌘/ | Ayuda |
-| ⌘Option+S | Mostrar/ocultar barra lateral |
+| ⌘Shift+C | Mostrar/ocultar barra lateral |
 
 #### Workstream {#workstream}
 
@@ -168,7 +168,6 @@ Factory Floor prioriza el teclado. Aquí está todo.
 | ⌘B | Nuevo navegador (inicia el servidor de desarrollo) |
 | ⌘J | Mostrar/ocultar agentes píxel |
 | ⌘P | Buscar archivo (Editor) |
-| ⌘⇧C | Copiar ruta del archivo (Editor) |
 | ⌘W | Cerrar tab |
 | ⌘Shift+W | Archivar workstream |
 | ⌘L | Barra de direcciones (navegador) |

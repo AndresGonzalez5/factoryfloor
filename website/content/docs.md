@@ -157,7 +157,7 @@ Factory Floor is keyboard-first. Here's everything.
 | ⌘Shift+N | New project |
 | ⌘, | Settings |
 | ⌘/ | Help |
-| ⌘Option+S | Toggle sidebar |
+| ⌘Shift+C | Toggle sidebar |
 
 #### Workstream
 
@@ -174,7 +174,6 @@ Factory Floor is keyboard-first. Here's everything.
 | ⌘B | New Browser (starts the dev server) |
 | ⌘O | New Editor |
 | ⌘P | Find File (Editor) |
-| ⌘⇧C | Copy File Path (Editor) |
 | ⌘J | Toggle pixel agents |
 | ⌘S | Save (Editor) |
 | ⌘Shift+S | Save As (Editor) |

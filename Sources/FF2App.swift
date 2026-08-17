@@ -331,7 +331,7 @@ struct FF2App: App {
                 Button("Toggle Sidebar") {
                     NotificationCenter.default.post(name: .toggleSidebar, object: nil)
                 }
-                .keyboardShortcut("s", modifiers: [.command, .option])
+                .keyboardShortcut("c", modifiers: [.command, .shift])
             }
             // Tabs
             CommandGroup(after: .toolbar) {
@@ -360,11 +360,6 @@ struct FF2App: App {
                         NotificationCenter.default.post(name: .toggleFileFinder, object: nil)
                     }
                     .keyboardShortcut("p", modifiers: .command)
-
-                    Button("Copy File Path") {
-                        NotificationCenter.default.post(name: .copyEditorPath, object: nil)
-                    }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
                 }
 
                 Button("Changes") {
