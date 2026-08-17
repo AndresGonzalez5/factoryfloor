@@ -215,6 +215,7 @@
 "Info panel" = "Informationspanel";
 "New Terminal" = "Ny terminal";
 "New Browser" = "Ny webbläsare";
+"New Browser (starts dev server)" = "Ny webbläsare (startar utvecklingsservern)";
 "Close tab" = "Stäng flik";
 "Address bar" = "Adressfält";
 "Back to project" = "Tillbaka till projekt";
@@ -243,6 +244,7 @@
 /* BrowserView */
 "Server not responding" = "Servern svarar inte";
 "Retry" = "Försök igen";
+"Starting dev server…" = "Startar utvecklingsservern…";
 
 /* ProjectOverviewView */
 "Repository" = "Repository";
@@ -269,6 +271,14 @@
 "No %@ script configured" = "Inget %@-skript konfigurerat";
 "Add a %@ field to .factoryfloor.json:" = "Lägg till ett %@-fält i .factoryfloor.json:";
 "Also supports .factoryfloor/config.json." = "Stöder även .factoryfloor/config.json.";
+
+/* Dev server */
+"Dev command" = "Dev-kommando";
+"Customize" = "Anpassa";
+"Custom" = "Anpassad";
+"From package.json" = "Från package.json";
+"No dev command found. Add a dev script to package.json or set one below." = "Inget dev-kommando hittades. Lägg till ett dev-skript i package.json eller ange ett nedan.";
+"Press ⌘B to start the dev server and open a browser tab." = "Tryck på ⌘B för att starta utvecklingsservern och öppna en webbläsarflik.";
 
 /* Tab labels */
 "Info" = "Info";

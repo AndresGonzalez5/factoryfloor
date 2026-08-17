@@ -48,6 +48,7 @@ private func normalizedBrowserURL(_ urlString: String) -> String {
 
 struct BrowserView: View {
     let defaultURL: String
+    var isWaitingForServer = false
     var tabID: UUID?
     let webView: WKWebView
 
@@ -128,9 +129,18 @@ struct BrowserView: View {
                     connectionError: $connectionError,
                     pageTitle: $pageTitle
                 )
-                .opacity(connectionError ? 0 : 1)
+                .opacity(connectionError && !isWaitingForServer ? 0 : 1)
 
-                if connectionError {
+                if isWaitingForServer {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .controlSize(.regular)
+                        Text("Starting dev server…")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if connectionError {
                     VStack(spacing: 16) {
                         Image(systemName: "wifi.slash")
                             .font(.system(size: 40))
@@ -150,8 +160,10 @@ struct BrowserView: View {
         }
         .onAppear {
             if webView.url == nil {
-                urlText = defaultURL
-                navigateTo(defaultURL)
+                if !isWaitingForServer {
+                    urlText = defaultURL
+                    navigateTo(defaultURL)
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     urlFieldFocused = true
                 }
@@ -167,6 +179,7 @@ struct BrowserView: View {
             urlFieldFocused = true
         }
         .onChange(of: defaultURL) { oldURL, newURL in
+            guard !isWaitingForServer else { return }
             guard shouldRetargetBrowser(
                 currentURL: webView.url?.absoluteString,
                 displayedURL: urlText,
@@ -176,6 +189,11 @@ struct BrowserView: View {
             ) else { return }
             urlText = newURL
             navigateTo(newURL)
+        }
+        .onChange(of: isWaitingForServer) { _, waiting in
+            guard !waiting, webView.url == nil else { return }
+            urlText = defaultURL
+            navigateTo(defaultURL)
         }
         .onChange(of: pageTitle) { _, newTitle in
             guard let tabID else { return }

@@ -214,6 +214,7 @@
 "Info panel" = "Info-Panel";
 "New Terminal" = "Neues Terminal";
 "New Browser" = "Neuer Browser";
+"New Browser (starts dev server)" = "Neuer Browser (startet Entwicklungs-Server)";
 "Close tab" = "Tab schließen";
 "Address bar" = "Adressleiste";
 "Back to project" = "Zurück zum Projekt";
@@ -242,6 +243,7 @@
 /* BrowserView */
 "Server not responding" = "Server antwortet nicht";
 "Retry" = "Erneut versuchen";
+"Starting dev server…" = "Entwicklungs-Server wird gestartet…";
 
 /* ProjectOverviewView */
 "Repository" = "Repository";
@@ -268,6 +270,14 @@
 "No %@ script configured" = "Kein %@-Skript konfiguriert";
 "Add a %@ field to .factoryfloor.json:" = "Füge ein %@-Feld zu .factoryfloor.json hinzu:";
 "Also supports .factoryfloor/config.json." = "Unterstützt auch .factoryfloor/config.json.";
+
+/* Dev server */
+"Dev command" = "Dev-Befehl";
+"Customize" = "Anpassen";
+"Custom" = "Benutzerdefiniert";
+"From package.json" = "Aus package.json";
+"No dev command found. Add a dev script to package.json or set one below." = "Kein Dev-Befehl gefunden. Füge ein dev-Skript in package.json hinzu oder lege unten einen fest.";
+"Press ⌘B to start the dev server and open a browser tab." = "Drücke ⌘B, um den Entwicklungs-Server zu starten und einen Browser-Tab zu öffnen.";
 
 /* Tab labels */
 "Info" = "Info";

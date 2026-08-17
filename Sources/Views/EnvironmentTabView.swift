@@ -1,5 +1,5 @@
-// ABOUTME: View for the run script in the Environment tab.
-// ABOUTME: Shows a terminal for the run script, or instructions when not configured.
+// ABOUTME: View for the run script / dev server in the Environment tab.
+// ABOUTME: Shows a terminal for the running server, or start instructions when not configured.
 
 import SwiftUI
 
@@ -26,17 +26,33 @@ struct EnvironmentTabView: View {
     let scriptConfig: ScriptConfig
     let useTmux: Bool
     let environmentVars: [String: String]
+    /// Final assembled run command (ff-run + tmux wrap), set once the session starts.
+    let runCommand: String?
+    /// Whether the command comes from the repo config and needs approval.
+    let runCommandIsGated: Bool
+    /// The resolved dev command when no run script is configured.
+    let devCommand: DevCommand?
+    @Binding var devCommandOverride: String?
     @Binding var runStoppedManually: Bool
     @Binding var runStarted: Bool
     @Binding var scriptsApproved: Bool
+    @Binding var runGeneration: Int
+    let onStart: () -> Void
+    let onStop: () -> Void
+    let onRestart: () -> Void
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject var appEnv: AppEnvironment
-    @State private var runGeneration = 0
-    @State private var runRestarting = false
+    @State private var isCustomizingDevCommand = false
+    @State private var devCommandEditText = ""
 
     private var runID: UUID {
         derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
+    }
+
+    /// The short, human-readable command this pane would run.
+    private var runCommandPreference: String? {
+        scriptConfig.run ?? devCommand?.command
     }
 
     var body: some View {
@@ -55,19 +71,9 @@ struct EnvironmentTabView: View {
 
     private var environmentContent: some View {
         runPane()
-            .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
-                if scriptConfig.run != nil, scriptsApproved {
-                    if runStarted {
-                        restartRun()
-                    } else {
-                        runStoppedManually = false
-                        runStarted = true
-                    }
-                }
-            }
             .onChange(of: scriptsApproved) { _, approved in
                 // Withdrawing approval stops what the repository is already running.
-                if !approved, runStarted { stopRun() }
+                if !approved, runStarted { onStop() }
             }
             .onAppear {
                 restoreRunState()
@@ -81,10 +87,7 @@ struct EnvironmentTabView: View {
         VStack(spacing: 0) {
             HStack {
                 if runControlsEnabled, !runStarted {
-                    Button(action: {
-                        runStoppedManually = false
-                        runStarted = true
-                    }) {
+                    Button(action: onStart) {
                         Image(systemName: "play.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
@@ -99,15 +102,15 @@ struct EnvironmentTabView: View {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
 
-                if let script = scriptConfig.run {
-                    Text(script)
+                if let command = runCommandPreference, scriptConfig.run != nil {
+                    Text(command)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
 
-                if scriptConfig.run != nil, RunLauncher.executableURL() == nil {
+                if runCommandPreference != nil, RunLauncher.executableURL() == nil {
                     Text("No port detection")
                         .font(.system(size: 9))
                         .foregroundStyle(.orange)
@@ -118,13 +121,10 @@ struct EnvironmentTabView: View {
 
                 if runControlsEnabled {
                     if runStarted {
-                        EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: stopRun)
-                        EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: restartRun)
+                        EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
+                        EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
                     } else {
-                        EnvActionButton(label: NSLocalizedString("Start", comment: ""), icon: "play.fill", shortcut: shortcut) {
-                            runStoppedManually = false
-                            runStarted = true
-                        }
+                        EnvActionButton(label: NSLocalizedString("Start", comment: ""), icon: "play.fill", shortcut: shortcut, action: onStart)
                     }
                 }
             }
@@ -134,62 +134,139 @@ struct EnvironmentTabView: View {
 
             Divider()
 
-            if let script = scriptConfig.run {
-                if !scriptsApproved {
-                    ScriptApprovalView(
-                        scriptConfig: scriptConfig,
-                        approveLabel: NSLocalizedString("Approve and Start", comment: ""),
-                        onApprove: {
-                            ScriptTrust.approve(scriptConfig, for: projectDirectory)
-                            scriptsApproved = true
-                            runStoppedManually = false
-                            runStarted = true
+            if scriptConfig.run == nil {
+                devCommandSection
+                Divider()
+            }
+
+            if runCommandIsGated, !scriptsApproved {
+                ScriptApprovalView(
+                    scriptConfig: scriptConfig,
+                    approveLabel: NSLocalizedString("Approve and Start", comment: ""),
+                    onApprove: {
+                        ScriptTrust.approve(scriptConfig, for: projectDirectory)
+                        scriptsApproved = true
+                        onStart()
+                    }
+                )
+            } else if runStarted, let runCommand {
+                SingleTerminalView(
+                    surfaceID: runID,
+                    workingDirectory: workingDirectory,
+                    command: runCommand,
+                    isFocused: false,
+                    environmentVars: environmentVars
+                )
+                .id(runID)
+            } else if runCommandPreference != nil {
+                VStack(spacing: 12) {
+                    Button(action: onStart) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 14))
+                            Text("Start")
+                                .font(.system(size: 13, weight: .medium))
                         }
-                    )
-                } else if runStarted && !runRestarting {
-                    SingleTerminalView(
-                        surfaceID: runID,
-                        workingDirectory: workingDirectory,
-                        command: envCommand(script: script, role: "run"),
-                        isFocused: false,
-                        environmentVars: environmentVars
-                    )
-                    .id(runID)
-                } else if !runStarted {
-                    VStack(spacing: 12) {
-                        Button(action: {
-                            runStoppedManually = false
-                            runStarted = true
-                        }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "play.fill")
-                                    .font(.system(size: 14))
-                                Text("Start")
-                                    .font(.system(size: 13, weight: .medium))
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color.accentColor)
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .buttonStyle(.borderless)
-                        Text(script)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.accentColor)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.borderless)
+                    if let command = runCommandPreference {
+                        Text(command)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.tertiary)
-                        Text(shortcut)
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    Color.clear
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Text(shortcut)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 scriptInstructions(title: title)
             }
         }
+    }
+
+    /// Shows the effective dev command (package.json auto-detection or the
+    /// user's per-workstream override) and lets the user customize it.
+    private var devCommandSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Dev command")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Button(isCustomizingDevCommand ? "Cancel" : "Customize") {
+                    if isCustomizingDevCommand {
+                        isCustomizingDevCommand = false
+                    } else {
+                        devCommandEditText = devCommand?.command ?? ""
+                        isCustomizingDevCommand = true
+                    }
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11))
+            }
+
+            if let devCommand {
+                HStack(spacing: 6) {
+                    Text(devCommand.command)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    sourceTag(for: devCommand.source)
+                }
+            } else {
+                Text("No dev command found. Add a dev script to package.json or set one below.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            if isCustomizingDevCommand {
+                HStack(spacing: 6) {
+                    TextField("Command", text: $devCommandEditText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11, design: .monospaced))
+                    Button("Save") {
+                        let trimmed = devCommandEditText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        devCommandOverride = trimmed.isEmpty ? nil : trimmed
+                        isCustomizingDevCommand = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            if devCommand == nil, !isCustomizingDevCommand {
+                Text("Press \u{2318}B to start the dev server and open a browser tab.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func sourceTag(for source: DevCommand.Source) -> some View {
+        let text: String
+        switch source {
+        case .configScript:
+            text = ".factoryfloor.json"
+        case .override:
+            text = NSLocalizedString("Custom", comment: "")
+        case .packageJSON:
+            text = NSLocalizedString("From package.json", comment: "")
+        }
+        return Text(text)
+            .font(.system(size: 9, design: .monospaced))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Color.primary.opacity(0.06))
+            .clipShape(Capsule())
+            .foregroundStyle(.tertiary)
     }
 
     private func configErrorBanner(error: String) -> some View {
@@ -244,93 +321,20 @@ struct EnvironmentTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func envCommand(script: String, role: String) -> String {
-        let baseCommand: String
-        let ffRunPath = RunLauncher.executableURL()?.path
-        if role == "run", let launcherPath = ffRunPath {
-            baseCommand = runScriptCommand(script: script, workstreamID: workstreamID, launcherPath: launcherPath)
-        } else {
-            baseCommand = scriptCommand(script: script, role: role)
-        }
-        let finalCommand = buildCommand(script: baseCommand, role: role)
-
-        let event = "run-start"
-        var intermediates = [script, baseCommand]
-        if finalCommand != baseCommand {
-            intermediates.append(finalCommand)
-        }
-        LaunchLogger.log(LaunchLogEntry(
-            workstreamID: workstreamID,
-            event: event,
-            finalCommand: finalCommand,
-            intermediateCommands: intermediates,
-            environmentVariables: environmentVars,
-            workingDirectory: workingDirectory,
-            toolPaths: LaunchLogEntry.ToolPaths(
-                claude: nil,
-                tmux: useTmux ? appEnv.toolStatus.tmux.path : nil,
-                ffRun: ffRunPath
-            ),
-            settings: LaunchLogEntry.Settings(
-                tmuxMode: useTmux,
-                bypassPermissions: false,
-                agentTeams: false,
-                autoRenameBranch: false,
-                allowOutsideWorktree: false
-            ),
-            shell: CommandBuilder.userShell
-        ))
-
-        return finalCommand
-    }
-
-    private func buildCommand(script: String, role: String) -> String {
-        if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
-            let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: role)
-            return TmuxSession.wrapCommand(tmuxPath: tmuxPath, sessionName: session, command: script, environmentVars: environmentVars)
-        }
-        return script
-    }
-
-    private func killTmuxSession(role: String) {
-        guard useTmux, let tmuxPath = appEnv.toolStatus.tmux.path else { return }
-        let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: role)
-        TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
-    }
-
-    private func stopRun() {
-        killTmuxSession(role: "run")
-        surfaceCache.removeSurface(for: runID)
-        runStoppedManually = true
-        runStarted = false
-        runGeneration += 1
-    }
-
-    private func restartRun() {
-        killTmuxSession(role: "run")
-        surfaceCache.removeSurface(for: runID)
-        runStoppedManually = false
-        runRestarting = true
-        runStarted = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            runGeneration += 1
-            runRestarting = false
-            runStarted = true
-        }
-    }
-
     private var runControlsEnabled: Bool {
-        scriptConfig.run != nil && scriptsApproved
+        runCommandPreference != nil && (runCommandIsGated ? scriptsApproved : true)
     }
 
     private func restoreRunState() {
         guard !runStarted,
               useTmux,
-              scriptConfig.run != nil,
+              runCommandPreference != nil,
               let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
         let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
-        if shouldRestoreRunSession(useTmux: useTmux, hasRunScript: scriptConfig.run != nil, hasExistingRunSession: hasExistingRunSession, wasStoppedManually: runStoppedManually, isApproved: scriptsApproved) {
+        // Dev commands (package.json / override) are never gated.
+        let approved = runCommandIsGated ? scriptsApproved : true
+        if shouldRestoreRunSession(useTmux: useTmux, hasRunScript: runCommandPreference != nil, hasExistingRunSession: hasExistingRunSession, wasStoppedManually: runStoppedManually, isApproved: approved) {
             runStarted = true
         }
     }

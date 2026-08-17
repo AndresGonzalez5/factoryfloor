@@ -171,7 +171,7 @@ Factory Floor is keyboard-first. Here's everything.
 | ⌘Shift+] | Next tab |
 | ⌘Return | Focus Coding Agent |
 | ⌘T | New Terminal |
-| ⌘B | New Browser |
+| ⌘B | New Browser (starts the dev server) |
 | ⌘O | New Editor |
 | ⌘P | Find File (Editor) |
 | ⌘⇧C | Copy File Path (Editor) |
