@@ -112,6 +112,7 @@
 "Find File" = "Find File";
 "Copy File Path" = "Copy File Path";
 "Copied: %@" = "Copied: %@";
+"File path copied" = "File path copied";
 "No file open" = "No file open";
 "Find File (\u2318P)" = "Find File (\u2318P)";
 "Search files by name" = "Search files by name";

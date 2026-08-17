@@ -173,6 +173,8 @@ final class MonacoDiffBridge: ObservableObject {
                 comment: "Changes tab: large-file click-to-load placeholder"
             ),
             "noChanges": NSLocalizedString("No changes", comment: "Changes tab: empty state"),
+            "copyFile": NSLocalizedString("Copy File Path", comment: "Changes diff header: copy file path button"),
+            "copied": NSLocalizedString("File path copied", comment: "Changes diff header: copy confirmation"),
         ]
         guard let json = Self.jsonString(from: strings) else { return }
         webView.evaluateJavaScript("window.diffAPI.setStrings(\(json))")
@@ -278,6 +280,11 @@ final class MonacoDiffBridge: ObservableObject {
                 case "loadFile":
                     if let filePath = body["filePath"] as? String {
                         self.bridge.handleLoadFile(filePath)
+                    }
+                case "copyPath":
+                    if let filePath = body["filePath"] as? String {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(filePath, forType: .string)
                     }
                 case "error":
                     if let msg = body["message"] as? String {

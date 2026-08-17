@@ -73,11 +73,52 @@
       border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
     }
     .diff-header .file-path {
-      flex: 1;
+      /* No flex-grow: the path hugs its content and the copy button sits
+         directly beside the title (mirrors the sidebar row layout). Shrinks
+         with an ellipsis when the path exceeds the header width. */
+      flex: 0 1 auto;
+      min-width: 0;
       font-family: Menlo, monospace;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    /* Always-visible copy button next to the file path; flashes a green
+       checkmark after a click (mirrors the GitHub PR review affordance). */
+    .diff-header .copy-btn {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: light-dark(rgba(0, 0, 0, 0.45), rgba(255, 255, 255, 0.45));
+      cursor: pointer;
+    }
+    .diff-header .copy-btn:hover {
+      background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.12));
+      color: light-dark(rgba(0, 0, 0, 0.8), rgba(255, 255, 255, 0.85));
+    }
+    .diff-header .copy-btn svg {
+      width: 12px;
+      height: 12px;
+      fill: currentColor;
+    }
+    .diff-header .copy-btn .icon-check {
+      display: none;
+    }
+    .diff-header .copy-btn.copied {
+      color: #3fb950;
+    }
+    .diff-header .copy-btn.copied .icon-copy {
+      display: none;
+    }
+    .diff-header .copy-btn.copied .icon-check {
+      display: block;
     }
 
     .status-badge {

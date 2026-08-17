@@ -112,6 +112,7 @@
 "Find File" = "Cerca un fitxer";
 "Copy File Path" = "Copia la ruta del fitxer";
 "Copied: %@" = "S'ha copiat: %@";
+"File path copied" = "Ruta del fitxer copiada";
 "No file open" = "No hi ha cap fitxer obert";
 "Find File (\u2318P)" = "Cerca un fitxer (\u2318P)";
 "Search files by name" = "Cerca fitxers pel nom";
