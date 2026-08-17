@@ -119,7 +119,7 @@ Every workstream terminal has access to:
 | `Cmd+Shift+N` | New project |
 | `Cmd+,` | Settings |
 | `Cmd+/` | Help |
-| `Cmd+Option+S` | Toggle sidebar |
+| `Cmd+Shift+C` | Toggle sidebar |
 
 #### Workstream
 
@@ -135,7 +135,6 @@ Every workstream terminal has access to:
 | `Cmd+B` | New Browser (starts the dev server) |
 | `Cmd+O` | New Editor |
 | `Cmd+P` | Find File (Editor) |
-| `Cmd+Shift+C` | Copy File Path (Editor) |
 | `Cmd+J` | Toggle pixel agents |
 | `Cmd+S` | Save (Editor) |
 | `Cmd+Shift+S` | Save As (Editor) |

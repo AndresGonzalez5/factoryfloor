@@ -151,7 +151,7 @@ Factory Floor ist tastaturorientiert. Hier ist alles.
 | ⌘Shift+N | Neues Projekt |
 | ⌘, | Einstellungen |
 | ⌘/ | Hilfe |
-| ⌘Option+S | Seitenleiste ein-/ausblenden |
+| ⌘Shift+C | Seitenleiste ein-/ausblenden |
 
 #### Workstream {#workstream}
 
@@ -168,7 +168,6 @@ Factory Floor ist tastaturorientiert. Hier ist alles.
 | ⌘B | Neuer Browser (startet Entwicklungs-Server) |
 | ⌘J | Pixel-Agenten ein-/ausblenden |
 | ⌘P | Datei suchen (Editor) |
-| ⌘⇧C | Dateipfad kopieren (Editor) |
 | ⌘W | Tab schließen |
 | ⌘Shift+W | Workstream archivieren |
 | ⌘L | Adressleiste (Browser) |

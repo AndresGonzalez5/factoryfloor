@@ -151,7 +151,7 @@ Factory Floor är tangentbord-först. Här är allt.
 | ⌘Shift+N | Nytt projekt |
 | ⌘, | Inställningar |
 | ⌘/ | Hjälp |
-| ⌘Option+S | Visa/dölj sidopanel |
+| ⌘Shift+C | Visa/dölj sidopanel |
 
 #### Workstream {#workstream}
 
@@ -168,7 +168,6 @@ Factory Floor är tangentbord-först. Här är allt.
 | ⌘B | Ny webbläsare (startar utvecklingsservern) |
 | ⌘J | Visa/dölj pixel-agenter |
 | ⌘P | Sök fil (Editor) |
-| ⌘⇧C | Kopiera filsökväg (Editor) |
 | ⌘W | Stäng tab |
 | ⌘Shift+W | Arkivera workstream |
 | ⌘L | Adressfält (browser) |
