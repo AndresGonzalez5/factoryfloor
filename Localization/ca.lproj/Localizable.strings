@@ -215,6 +215,7 @@
 "Info panel" = "Panell d'informació";
 "New Terminal" = "Nou terminal";
 "New Browser" = "Nou navegador";
+"New Browser (starts dev server)" = "Nou navegador (inicia el servidor de desenvolupament)";
 "Close tab" = "Tanca la pestanya";
 "Address bar" = "Barra d'adreces";
 "Back to project" = "Torna al projecte";
@@ -243,6 +244,7 @@
 /* BrowserView */
 "Server not responding" = "El servidor no respon";
 "Retry" = "Reintenta";
+"Starting dev server…" = "Iniciant el servidor de desenvolupament…";
 
 /* ProjectOverviewView */
 "Repository" = "Repositori";
@@ -269,6 +271,14 @@
 "No %@ script configured" = "No hi ha cap script de %@ configurat";
 "Add a %@ field to .factoryfloor.json:" = "Afegeix un camp %@ a .factoryfloor.json:";
 "Also supports .factoryfloor/config.json." = "També compatible amb .factoryfloor/config.json.";
+
+/* Dev server */
+"Dev command" = "Ordre de desenvolupament";
+"Customize" = "Personalitza";
+"Custom" = "Personalitzat";
+"From package.json" = "De package.json";
+"No dev command found. Add a dev script to package.json or set one below." = "No s'ha trobat cap ordre de desenvolupament. Afegeix un script dev a package.json o configura'n un a sota.";
+"Press ⌘B to start the dev server and open a browser tab." = "Premeu ⌘B per iniciar el servidor de desenvolupament i obrir una pestanya del navegador.";
 
 /* Tab labels */
 "Info" = "Informació";

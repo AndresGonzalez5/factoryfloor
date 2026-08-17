@@ -3,8 +3,19 @@
 
 import Foundation
 
+/// Lifecycle of the ff-run session for a workstream.
+enum PortStatus: Equatable, Sendable {
+    /// No ff-run session is alive (server not running).
+    case none
+    /// A session is running but no port has been selected yet.
+    case starting
+    /// A listening port has been selected; the server is reachable.
+    case running
+}
+
 final class PortDetector: ObservableObject, @unchecked Sendable {
     @Published private(set) var selectedPort: Int?
+    @Published private(set) var status: PortStatus = .none
 
     private let workstreamID: UUID
     private let queue: DispatchQueue
@@ -91,8 +102,10 @@ final class PortDetector: ObservableObject, @unchecked Sendable {
         }
 
         let nextPort = state?.selectedPort
+        let nextStatus: PortStatus = state == nil ? .none : (state?.selectedPort != nil ? .running : .starting)
         DispatchQueue.main.async { [weak self] in
             self?.selectedPort = nextPort
+            self?.status = nextStatus
         }
     }
 }

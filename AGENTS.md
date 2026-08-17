@@ -184,7 +184,7 @@ Current shortcuts:
 - **Cmd+Shift+[/]**: Cycle tabs
 - **Cmd+Return**: Focus Coding Agent
 - **Cmd+T**: New Terminal
-- **Cmd+B**: New Browser
+- **Cmd+B**: New Browser (starts the dev server)
 - **Cmd+O**: New Editor
 - **Cmd+P**: Find File (Editor)
 - **Cmd+Shift+C**: Copy File Path (Editor)

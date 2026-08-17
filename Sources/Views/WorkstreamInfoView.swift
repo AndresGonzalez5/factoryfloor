@@ -12,10 +12,18 @@ struct WorkstreamInfoView: View {
     var scriptConfig: ScriptConfig = .empty
     var useTmux: Bool = false
     var environmentVars: [String: String] = [:]
+    var runCommand: String? = nil
+    var runCommandIsGated: Bool = false
+    var devCommand: DevCommand? = nil
+    @Binding var devCommandOverride: String?
     @Binding var runStoppedManually: Bool
     @Binding var runStarted: Bool
     @Binding var scriptsApproved: Bool
+    @Binding var runGeneration: Int
     var sessionMode: TerminalSessionMode = .standard
+    var onStart: () -> Void = {}
+    var onStop: () -> Void = {}
+    var onRestart: () -> Void = {}
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("factoryfloor.defaultTerminal") private var defaultTerminal: String = ""
@@ -214,7 +222,7 @@ struct WorkstreamInfoView: View {
             .formStyle(.grouped)
 
             // Environment (run script) section
-            if scriptConfig.run != nil || scriptConfig.loadError != nil {
+            if runCommand != nil || devCommand != nil || scriptConfig.loadError != nil {
                 Divider()
                 if sessionMode == .waitingForTools {
                     VStack(spacing: 12) {
@@ -235,9 +243,17 @@ struct WorkstreamInfoView: View {
                         scriptConfig: scriptConfig,
                         useTmux: useTmux,
                         environmentVars: environmentVars,
+                        runCommand: runCommand,
+                        runCommandIsGated: runCommandIsGated,
+                        devCommand: devCommand,
+                        devCommandOverride: $devCommandOverride,
                         runStoppedManually: $runStoppedManually,
                         runStarted: $runStarted,
-                        scriptsApproved: $scriptsApproved
+                        scriptsApproved: $scriptsApproved,
+                        runGeneration: $runGeneration,
+                        onStart: onStart,
+                        onStop: onStop,
+                        onRestart: onRestart
                     )
                 }
             } else {

@@ -330,8 +330,13 @@ struct TerminalContainerView: View {
     @State private var cachedClaudeCommand: String?
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
+    @State private var browserStartPending = false
     @State private var runStoppedManually = false
     @State private var runStarted = false
+    @State private var runGeneration = 0
+    @State private var runCommandString: String?
+    @State private var devCommandOverride: String?
+    @State private var resolvedDevCommand: DevCommand?
     @State private var workspaceStarted = false
     @State private var defaultBranch = "main"
     @State private var setupGateState: SetupGateState = .notNeeded
@@ -368,6 +373,15 @@ struct TerminalContainerView: View {
         _runStoppedManually = State(initialValue: initialTabState.runStoppedManually)
         _runStarted = State(initialValue: initialTabState.runStarted)
         _portDetector = StateObject(wrappedValue: PortDetector(workstreamID: workstreamID))
+
+        let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
+        _devCommandOverride = State(initialValue: savedOverride)
+        _resolvedDevCommand = State(initialValue: DevCommandResolver.resolve(
+            scriptConfig: scriptConfig,
+            workstreamID: workstreamID,
+            workingDirectory: workingDirectory,
+            override: savedOverride
+        ))
     }
 
     private var claudeID: UUID {
@@ -435,6 +449,41 @@ struct TerminalContainerView: View {
     private var browserDefaultURL: String {
         let port = portDetector.selectedPort ?? workstreamPort
         return "http://localhost:\(port)/"
+    }
+
+    /// The run session's surface ID. Bumped on stop/restart so a fresh
+    /// surface replaces the previous one.
+    private var runID: UUID {
+        derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
+    }
+
+    /// The dev server is coming up but has not exposed a port yet. Covers the
+    /// window between a browser-triggered start and the first ff-run state
+    /// write, so the browser never navigates to the placeholder port.
+    private var isWaitingForServer: Bool {
+        portDetector.status == .starting || (portDetector.status == .none && browserStartPending)
+    }
+
+    /// The command that starts the dev server: config run script, user
+    /// override, or the repo's package.json dev script.
+    private var resolvedRunCommand: String? {
+        if let run = scriptConfig.run { return run }
+        return resolvedDevCommand?.command
+    }
+
+    /// Config-provided run scripts are approval-gated; auto-detected or
+    /// user-authored dev commands are not.
+    private var runCommandIsGated: Bool {
+        scriptConfig.run != nil
+    }
+
+    /// Env vars for the run/dev-server surface. Adds the var that silences
+    /// the Next.js first-run telemetry prompt, which a headless terminal
+    /// cannot answer.
+    private var runEnvironmentVars: [String: String] {
+        var vars = terminalEnvVars
+        vars["NEXT_TELEMETRY_DISABLED"] = "1"
+        return vars
     }
 
     private var branchPR: GitHubPR? {
@@ -627,11 +676,19 @@ struct TerminalContainerView: View {
                 projectDirectory: projectDirectory,
                 scriptConfig: scriptConfig,
                 useTmux: useTmux,
-                environmentVars: terminalEnvVars,
+                environmentVars: runEnvironmentVars,
+                runCommand: runCommandString,
+                runCommandIsGated: runCommandIsGated,
+                devCommand: resolvedDevCommand,
+                devCommandOverride: $devCommandOverride,
                 runStoppedManually: $runStoppedManually,
                 runStarted: $runStarted,
                 scriptsApproved: $scriptsApproved,
-                sessionMode: sessionMode
+                runGeneration: $runGeneration,
+                sessionMode: sessionMode,
+                onStart: doStartRun,
+                onStop: stopRun,
+                onRestart: restartRun
             )
         case .changes:
             if let bridge = diffBridge {
@@ -686,7 +743,7 @@ struct TerminalContainerView: View {
                 environmentVars: terminalEnvVars
             )
         case let .browser(id):
-            BrowserView(defaultURL: browserDefaultURL, tabID: id, webView: surfaceCache.webView(for: id))
+            BrowserView(defaultURL: browserDefaultURL, isWaitingForServer: isWaitingForServer, tabID: id, webView: surfaceCache.webView(for: id))
                 .id(id)
         case let .editor(id):
             if let bridge = editorBridge {
@@ -743,6 +800,13 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
+                guard resolvedRunCommand != nil else { return }
+                guard !runCommandIsGated || scriptsApproved else { return }
+                if runStarted {
+                    restartRun()
+                } else {
+                    startRunIfNeeded()
+                }
                 activeTab = .info
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleTerminal)) { _ in
@@ -836,6 +900,29 @@ struct TerminalContainerView: View {
                 // Approving from the Info tab releases a waiting setup script.
                 if approved { startApprovedSetup() }
             }
+            .onChange(of: devCommandOverride) { _, newValue in
+                DevCommandResolver.saveOverride(newValue, for: workstreamID)
+                resolvedDevCommand = DevCommandResolver.resolve(
+                    scriptConfig: scriptConfig,
+                    workstreamID: workstreamID,
+                    workingDirectory: workingDirectory,
+                    override: newValue
+                )
+            }
+            .onChange(of: runStarted) { _, started in
+                // A session restored from tmux (or started before TerminalApp
+                // was ready) needs its command assembled on the container side
+                // so the restored surface reattaches to the existing session.
+                if started, runCommandString == nil, let command = resolvedRunCommand {
+                    runCommandString = buildRunCommand(script: command)
+                    preloadRunSurface()
+                }
+            }
+            .onChange(of: portDetector.status) { _, newStatus in
+                // Once the session materializes (ff-run wrote state), the
+                // waiting overlay is driven by the status itself.
+                if newStatus != .none { browserStartPending = false }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .switchByNumber)) { notification in
                 guard isActive else { return }
                 guard let n = notification.object as? Int, n >= 1 else { return }
@@ -864,6 +951,10 @@ struct TerminalContainerView: View {
                 if surfaceID == setupGateID, setupGateState == .failed {
                     launchAgentAfterSetup()
                     return
+                }
+                if surfaceID == runID {
+                    // The dev-server session died; no port is coming.
+                    browserStartPending = false
                 }
                 if let tab = tabs.first(where: {
                     if case let .terminal(id) = $0 { return id == surfaceID }
@@ -1051,6 +1142,7 @@ struct TerminalContainerView: View {
     }
 
     private func addBrowser() {
+        startRunIfNeeded()
         browserCount += 1
         let id = derivedUUID(from: workstreamID, salt: "browser-\(browserCount)")
         let tab = WorkspaceTab.browser(id)
@@ -1058,6 +1150,146 @@ struct TerminalContainerView: View {
         activeTab = tab
         saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/browser", title: "Browser Tab", data: ["kind": "browser"])
+    }
+
+    /// Starts the dev server when the browser asks for it. The browser tab
+    /// owns the server's lifecycle: it stays up while a browser tab is open
+    /// and dies when the last one closes.
+    private func startRunIfNeeded() {
+        guard resolvedRunCommand != nil else { return }
+        guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
+        guard setupGateState != .awaitingApproval else { return }
+        guard portDetector.status == .none else { return }
+        if runCommandIsGated, !scriptsApproved { return }
+        if runStarted { stopRun() }
+        doStartRun()
+    }
+
+    /// Starts the run session unconditionally. Used by the Info pane controls,
+    /// which have already validated approval state.
+    @MainActor
+    private func doStartRun() {
+        guard let command = resolvedRunCommand else { return }
+        killRunTmuxSession()
+        surfaceCache.removeSurface(for: runID)
+        runStoppedManually = false
+        runGeneration += 1
+        runCommandString = buildRunCommand(script: command)
+        runStarted = true
+        markBrowserStartPending()
+        preloadRunSurface()
+        saveTabSnapshot()
+        Telemetry.shared.track(
+            "dev_server_start",
+            url: "/tab/browser",
+            title: "Dev Server",
+            data: ["source": (resolvedDevCommand?.source ?? .configScript).rawValue]
+        )
+    }
+
+    private func stopRun() {
+        killRunTmuxSession()
+        surfaceCache.removeSurface(for: runID)
+        runStoppedManually = true
+        runStarted = false
+        browserStartPending = false
+        runCommandString = nil
+        runGeneration += 1
+        saveTabSnapshot()
+    }
+
+    private func restartRun() {
+        guard resolvedRunCommand != nil else { return }
+        killRunTmuxSession()
+        surfaceCache.removeSurface(for: runID)
+        runStoppedManually = false
+        markBrowserStartPending()
+        runGeneration += 1
+        if let command = resolvedRunCommand {
+            runCommandString = buildRunCommand(script: command)
+        }
+        runStarted = true
+        preloadRunSurface()
+        saveTabSnapshot()
+    }
+
+    /// Marks the start so browser tabs hold the waiting overlay until a port
+    /// appears. Self-clears after a few seconds so a failed spawn (nothing
+    /// ever wrote state) still falls through to the error view.
+    @MainActor
+    private func markBrowserStartPending() {
+        browserStartPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [self] in
+            guard self.browserStartPending else { return }
+            self.browserStartPending = false
+        }
+    }
+
+    /// Create the run surface eagerly so the dev server starts even while the
+    /// browser tab is active and the Info pane is not rendered.
+    private func preloadRunSurface() {
+        guard let commandString = runCommandString else { return }
+        guard let app = TerminalApp.shared.app else { return }
+        _ = surfaceCache.surface(
+            for: runID,
+            app: app,
+            workingDirectory: workingDirectory,
+            command: commandString,
+            environmentVars: runEnvironmentVars
+        )
+    }
+
+    /// Assembles the final run command: ff-run wrap (port detection) + tmux wrap.
+    private func buildRunCommand(script: String) -> String {
+        let baseCommand: String
+        let ffRunPath = RunLauncher.executableURL()?.path
+        if let launcherPath = ffRunPath {
+            baseCommand = runScriptCommand(script: script, workstreamID: workstreamID, launcherPath: launcherPath)
+        } else {
+            baseCommand = scriptCommand(script: script, role: "run")
+        }
+
+        let finalCommand: String
+        if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
+            let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
+            finalCommand = TmuxSession.wrapCommand(tmuxPath: tmuxPath, sessionName: session, command: baseCommand, environmentVars: runEnvironmentVars)
+        } else {
+            finalCommand = baseCommand
+        }
+
+        var intermediates = [script, baseCommand]
+        if finalCommand != baseCommand {
+            intermediates.append(finalCommand)
+        }
+        LaunchLogger.log(LaunchLogEntry(
+            workstreamID: workstreamID,
+            event: "run-start",
+            finalCommand: finalCommand,
+            intermediateCommands: intermediates,
+            environmentVariables: runEnvironmentVars,
+            workingDirectory: workingDirectory,
+            toolPaths: LaunchLogEntry.ToolPaths(
+                claude: nil,
+                tmux: useTmux ? appEnv.toolStatus.tmux.path : nil,
+                ffRun: ffRunPath
+            ),
+            settings: LaunchLogEntry.Settings(
+                tmuxMode: useTmux,
+                bypassPermissions: false,
+                agentTeams: false,
+                autoRenameBranch: false,
+                allowOutsideWorktree: false
+            ),
+            shell: CommandBuilder.userShell
+        ))
+
+        return finalCommand
+    }
+
+    private func killRunTmuxSession() {
+        guard useTmux, let tmuxPath = appEnv.toolStatus.tmux.path else { return }
+        let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
+        TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
     }
 
     private func openEditor() {
@@ -1226,6 +1458,12 @@ struct TerminalContainerView: View {
             surfaceCache.removeSurface(for: id)
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
+            // The browser tab owns the dev server: closing the last one stops it.
+            let hasBrowserTabs = tabs.contains { tab in
+                if case .browser = tab { return true }
+                return false
+            }
+            if !hasBrowserTabs { stopRun() }
         case let .editor(id):
             editorFilePaths.removeValue(forKey: id)
             editorDirtyState.removeValue(forKey: id)

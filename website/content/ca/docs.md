@@ -165,7 +165,7 @@ Factory Floor prioritza el teclat. Aquí tens tot.
 | ⌘Shift+] | Tab següent |
 | ⌘Return | Focus Coding Agent |
 | ⌘T | Nou Terminal |
-| ⌘B | Nou navegador |
+| ⌘B | Nou navegador (inicia el servidor de desenvolupament) |
 | ⌘J | Mostra/oculta agents píxel |
 | ⌘P | Cerca un fitxer (Editor) |
 | ⌘⇧C | Copia la ruta del fitxer (Editor) |
