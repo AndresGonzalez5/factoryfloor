@@ -410,3 +410,14 @@
 "Stalled" = "Aturat";
 "Agent may be stalled" = "Pot ser que l'agent estigui aturat";
 "%lld agents active" = "%lld agents actius";
+
+/* Multi-harness support */
+"Claude Code" = "Claude Code";
+"OpenCode" = "OpenCode";
+"Default coding agent" = "Agent de codi per defecte";
+"Used when creating new workstreams. Each workstream can override this choice." = "S'utilitza en crear nous fluxos de treball. Cada flux de treball pot substituir aquesta opció.";
+"Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@." = "Activa la coordinació experimental multi-agent. Els agents poden crear companys d'equip, delegar tasques i col·laborar entre fluxos de treball. Només s'aplica a %@.";
+"%@ not found" = "No s'ha trobat %@";
+"Install %@ to use the Coding Agent." = "Instal·la %@ per utilitzar l'agent de codi.";
+"Install %@" = "Instal·la %@";
+"%@ is not installed." = "%@ no està instal·lat.";

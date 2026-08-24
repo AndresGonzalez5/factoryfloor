@@ -87,3 +87,15 @@
 - [x] Error feedback: worktree creation, non-git dir, ghostty init, project removal, Claude not found
 - [x] Fix: terminal mouse selection coordinates, env script lifecycle, proc_listchildpids count
 - [x] Restore full app state on launch, right-click sidebar menus, drag-and-drop tab reorder
+
+## Multi-harness support (Claude Code + OpenCode)
+
+- [x] CodingHarness enum with per-workstream harness selection and backward-compatible decoding
+- [x] OpenCode plugin auto-installer (status events, session tracking, instructions injection)
+- [x] Per-harness agent command building (resume/--session, --auto bypass, tmux wrapping)
+- [x] Harness picker in new-workstream sheet, global default setting, sidebar badges
+- [x] Switch-harness context menu with surface teardown + tmux kill
+- [x] OpenCode GitHub quick actions (opencode run -c --fork)
+- [ ] OpenCode subagent roster is best-effort (child session events; no per-subagent tool attribution like Claude's SubagentStart/Stop)
+- [ ] OpenCode quick-action output shows raw JSON event stream; could parse assistant text for cleaner display
+- [ ] Future harnesses (e.g., Codex): add enum case + command builder branch + event mapper

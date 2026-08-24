@@ -5,6 +5,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("factoryfloor.languageOverride") private var languageOverride: String = ""
+    @AppStorage("factoryfloor.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
+    private var defaultHarness: Binding<CodingHarness> {
+        Binding(
+            get: { CodingHarness(rawValue: defaultHarnessRaw) ?? .claudeCode },
+            set: { defaultHarnessRaw = $0.rawValue }
+        )
+    }
     @AppStorage("factoryfloor.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("factoryfloor.bypassPermissions") private var bypassPermissions: Bool = false
     @AppStorage("factoryfloor.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
@@ -42,6 +49,11 @@ struct SettingsView: View {
                     name: "claude",
                     status: appEnv.toolStatus.claude,
                     version: appEnv.toolStatus.claudeVersion
+                )
+                ToolRow(
+                    name: "opencode",
+                    status: appEnv.toolStatus.opencode,
+                    version: appEnv.toolStatus.opencodeVersion
                 )
                 ToolRow(
                     name: "gh",
@@ -163,6 +175,20 @@ struct SettingsView: View {
             // MARK: - Coding Agent
 
             Section("Coding Agent") {
+                Picker("Default coding agent", selection: defaultHarness) {
+                    ForEach(CodingHarness.allCases, id: \.self) { harness in
+                        Label {
+                            Text(harness.displayName)
+                        } icon: {
+                            Image(systemName: harness.systemImageName)
+                        }
+                        .tag(harness)
+                    }
+                }
+                Text("Used when creating new workstreams. Each workstream can override this choice.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 SettingToggle(
                     "Bypass permission prompts",
                     isOn: $bypassPermissions,
@@ -180,7 +206,7 @@ struct SettingsView: View {
                 SettingToggle(
                     "Agent Teams",
                     isOn: $agentTeams,
-                    description: "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams."
+                    description: String(format: NSLocalizedString("Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@.", comment: "Agent Teams setting description; %@ is a coding-agent name"), CodingHarness.claudeCode.displayName)
                 )
 
                 SettingToggle(
@@ -449,11 +475,21 @@ struct ToolStatus {
     var claude: BinaryStatus = .notFound
     var claudeVersion: String?
     var claudeSupportsSessionName: Bool = false
+    var opencode: BinaryStatus = .notFound
+    var opencodeVersion: String?
     var gh: BinaryStatus = .notFound
     var ghVersion: String?
     var ghAuthDetail: String?
     var git: BinaryStatus = .notFound
     var gitVersion: String?
+
+    /// Binary status for a given harness's CLI.
+    func binary(for harness: CodingHarness) -> BinaryStatus {
+        switch harness {
+        case .claudeCode: return claude
+        case .opencode: return opencode
+        }
+    }
 
     static func detect() -> ToolStatus {
         var status = ToolStatus()
@@ -467,6 +503,11 @@ struct ToolStatus {
         if let path = status.claude.path {
             status.claudeVersion = runForVersion(path, args: ["--version"])
             status.claudeSupportsSessionName = helpContainsFlag(path, flag: "--name")
+        }
+
+        status.opencode = findBinary("opencode")
+        if let path = status.opencode.path {
+            status.opencodeVersion = runForVersion(path, args: ["--version"])
         }
 
         status.gh = findBinary("gh")

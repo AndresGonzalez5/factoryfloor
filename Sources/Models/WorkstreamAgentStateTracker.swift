@@ -150,14 +150,14 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         let now = Date()
         var list = rosters[wsID] ?? []
 
-        func upsert(_ agentId: String, name: String = "Claude", palette: Int = 0, isMain: Bool = true, variantIndex: Int = 0, mutate: (inout AgentRun) -> Void = { _ in }) {
+        func upsert(_ agentId: String, name: String? = nil, palette: Int = 0, isMain: Bool = true, variantIndex: Int = 0, mutate: (inout AgentRun) -> Void = { _ in }) {
             if let idx = list.firstIndex(where: { $0.id == agentId }) {
                 mutate(&list[idx])
                 list[idx].lastEventAt = now
             } else {
                 var run = AgentRun(
                     id: agentId,
-                    name: name,
+                    name: name ?? "Claude",
                     palette: palette,
                     isMain: isMain,
                     variantIndex: variantIndex,
@@ -181,7 +181,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             list.removeAll { $0.id == event.agentId }
 
         case .agentToolStart:
-            upsert(event.agentId) { run in
+            upsert(event.agentId, name: event.name) { run in
                 run.activity = event.activity ?? run.activity
                 if run.state == .stalled { run.state = .working }
             }
@@ -196,10 +196,16 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             }
 
         case .agentWaiting:
-            upsert(event.agentId)
+            upsert(event.agentId, name: event.name)
 
         case .agentIdle:
-            list.removeAll { $0.id == "main" }
+            // Main going idle ends the whole turn; a child idling removes only
+            // that child.
+            if event.agentId == "main" {
+                list.removeAll()
+            } else {
+                list.removeAll { $0.id == event.agentId }
+            }
 
         case .agentStatus:
             // Permission prompts don't change the roster; the sweep skips

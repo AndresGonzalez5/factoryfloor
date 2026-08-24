@@ -1,4 +1,4 @@
-// ABOUTME: Spawns one-shot claude -p subprocesses or git/gh commands for quick actions.
+// ABOUTME: Spawns one-shot coding-agent subprocesses or git/gh commands for quick actions.
 // ABOUTME: Forks from the active session for context-aware tasks like PR creation.
 
 import Foundation
@@ -87,7 +87,8 @@ final class QuickActionRunner: ObservableObject {
 
     func run(
         action: QuickAction,
-        claudePath: String?,
+        harness: CodingHarness = .claudeCode,
+        agentPath: String?,
         ghPath: String?,
         workingDirectory: String,
         branchName: String? = nil
@@ -99,8 +100,13 @@ final class QuickActionRunner: ObservableObject {
 
         switch action {
         case .commit, .createPR:
-            guard let claudePath else { return }
-            runClaudeAction(action: action, claudePath: claudePath, workingDirectory: workingDirectory)
+            guard let agentPath else { return }
+            switch harness {
+            case .claudeCode:
+                runClaudeAction(action: action, claudePath: agentPath, workingDirectory: workingDirectory)
+            case .opencode:
+                runOpencodeAction(action: action, opencodePath: agentPath, workingDirectory: workingDirectory)
+            }
         case .push:
             runPush(workingDirectory: workingDirectory)
         case .closePR:
@@ -126,6 +132,24 @@ final class QuickActionRunner: ObservableObject {
         let innerCommand = args.joined(separator: " ")
         let shell = CommandBuilder.userShell
         runShellCommand(action: action, shell: shell, arguments: ["-lic", innerCommand], workingDirectory: workingDirectory, parseJSON: true)
+    }
+
+    private func runOpencodeAction(action: QuickAction, opencodePath: String, workingDirectory: String) {
+        guard let prompt = action.prompt else { return }
+
+        // Continue the worktree's last session in forked form so quick actions
+        // never pollute the interactive conversation.
+        var args: [String] = []
+        args.append(opencodePath)
+        args.append("run")
+        args.append("--continue")
+        args.append("--fork")
+        args.append("--auto")
+        args.append(CommandBuilder.shellQuote(prompt))
+
+        let innerCommand = args.joined(separator: " ")
+        let shell = CommandBuilder.userShell
+        runShellCommand(action: action, shell: shell, arguments: ["-lic", innerCommand], workingDirectory: workingDirectory, parseJSON: false)
     }
 
     private func runPush(workingDirectory: String) {

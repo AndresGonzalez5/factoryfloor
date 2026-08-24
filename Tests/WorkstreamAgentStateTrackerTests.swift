@@ -281,4 +281,36 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         // Unknown tools have no canned phrase (falls back to the tool name in the UI).
         XCTAssertNil(HookEventReceiver.activityDescription(toolName: "SomeCustomTool", toolInput: nil))
     }
+
+    // MARK: - OpenCode (lowercase tool names, per-harness run names)
+
+    func testActivityDescriptionMatchesLowercaseOpencodeTools() {
+        let filePathInput: [String: Any] = ["file_path": "/repo/Sources/Foo.swift"]
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "edit", toolInput: filePathInput), String(format: NSLocalizedString("Editing %@", comment: ""), "Foo.swift"))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "read", toolInput: filePathInput), String(format: NSLocalizedString("Reading %@", comment: ""), "Foo.swift"))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "grep", toolInput: nil), NSLocalizedString("Searching", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "bash", toolInput: nil), NSLocalizedString("Running command", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "todowrite", toolInput: nil), NSLocalizedString("Planning", comment: ""))
+    }
+
+    func testOpencodeRunUsesProvidedHarnessName() {
+        var event = AgentEvent.waiting(agentId: "main")
+        event.name = "OpenCode"
+        handle(event)
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "OpenCode")
+    }
+
+    func testChildIdleRemovesOnlyThatChild() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "ses_child", name: "Explore", palette: 1))
+        handle(.idle(agentId: "ses_child"))
+        XCTAssertEqual(tracker.runs(for: wsID).map(\.id), ["main"])
+    }
+
+    func testMainIdleClearsRemainingChildren() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "ses_a", name: "Explore", palette: 1))
+        handle(.idle(agentId: "main"))
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
+    }
 }

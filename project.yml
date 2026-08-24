@@ -101,6 +101,8 @@ targets:
         buildPhase: resources
       - path: Resources/Scripts/ff-hook
         buildPhase: resources
+      - path: Resources/Scripts/factoryfloor-opencode.js
+        buildPhase: resources
       - path: Resources/AgentSprites
         buildPhase: resources
         type: folder

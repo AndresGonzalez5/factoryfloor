@@ -16,7 +16,8 @@ enum WorkstreamEnvironment {
         port: Int,
         agentTeams: Bool,
         defaultBranch: String = "main",
-        scriptSource: String? = nil
+        scriptSource: String? = nil,
+        harness: CodingHarness = .claudeCode
     ) -> [String: String] {
         let id = workstreamID.uuidString.lowercased()
         let portString = "\(port)"
@@ -29,8 +30,10 @@ enum WorkstreamEnvironment {
             "FF_WORKTREE_DIR": workingDirectory,
             "FF_PORT": portString,
             "FF_DEFAULT_BRANCH": defaultBranch,
+            "FF_HARNESS": harness.rawValue,
         ]
-        if agentTeams {
+        // Agent Teams is a Claude Code experimental feature.
+        if agentTeams, harness == .claudeCode {
             vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
         }
 

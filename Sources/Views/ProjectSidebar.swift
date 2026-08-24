@@ -58,6 +58,8 @@ struct ProjectSidebar: View {
     @State private var newWorkstreamPlaceholder = ""
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
+    @State private var pendingWorkstreamHarness: CodingHarness = .claudeCode
+    @AppStorage("factoryfloor.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
 
     private func recomputeSortedIDs() -> [UUID] {
         guard let space = UUID(uuidString: currentSpaceID) else {
@@ -216,6 +218,8 @@ struct ProjectSidebar: View {
                                 prTitle: pr?.title,
                                 prNumber: pr?.number,
                                 prState: pr?.state,
+                                harness: workstream.harness,
+                                onSwitchHarness: { switchHarness(workstream, to: $0) },
                                 onRemove: { workstreamToRemove = workstream.id },
                                 onPurge: { confirmPurge(workstream) },
                                 onRename: { promptRenameWorkstream(workstream) }
@@ -393,11 +397,13 @@ struct ProjectSidebar: View {
                     error: $newWorkstreamError,
                     projectName: pendingWorkstreamProjectID.flatMap { id in projects.first(where: { $0.id == id })?.name } ?? "",
                     placeholder: newWorkstreamPlaceholder,
+                    harness: $pendingWorkstreamHarness,
                     onAdd: { createWorkstream() },
                     onCancel: {
                         showingNewWorkstreamName = false
                         pendingWorkstreamProjectID = nil
                         pendingWorkstreamBypass = nil
+                        pendingWorkstreamHarness = CodingHarness(rawValue: defaultHarnessRaw) ?? .claudeCode
                     }
                 )
             }
@@ -524,6 +530,7 @@ struct ProjectSidebar: View {
         newWorkstreamPlaceholder = NameGenerator.generate(avoiding: existingNames)
         pendingWorkstreamProjectID = projectID
         pendingWorkstreamBypass = bypassPermissions
+        pendingWorkstreamHarness = CodingHarness(rawValue: defaultHarnessRaw) ?? .claudeCode
         showingNewWorkstreamName = true
     }
 
@@ -561,7 +568,7 @@ struct ProjectSidebar: View {
         showingNewWorkstreamName = false
         pendingWorkstreamProjectID = nil
         pendingWorkstreamBypass = nil
-        let workstream = Workstream(name: name, worktreePath: nil, bypassPermissions: bypass)
+        let workstream = Workstream(name: name, worktreePath: nil, bypassPermissions: bypass, harness: pendingWorkstreamHarness)
         expandedProjects.insert(projectID)
         NotificationCenter.default.post(
             name: .workstreamCreated,
@@ -664,6 +671,27 @@ struct ProjectSidebar: View {
             return project.id
         }
         return nil
+    }
+
+    /// Flips a workstream's coding agent. Tears down the current agent surface
+    /// (and its tmux session) so the next spawn relaunches under the new harness.
+    private func switchHarness(_ workstream: Workstream, to harness: CodingHarness) {
+        guard workstream.harness != harness,
+              let pi = projects.firstIndex(where: { $0.id == workstreamProjectID(for: workstream.id) }),
+              let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstream.id })
+        else { return }
+
+        logger.warning("[FF] switchHarness \(workstream.harness.rawValue, privacy: .public) -> \(harness.rawValue, privacy: .public) for \(workstream.name, privacy: .public)")
+
+        surfaceCache.removeSurface(for: workstream.id)
+        let tmuxSession = TmuxSession.sessionName(project: projects[pi].name, workstream: workstream.name, role: "agent")
+        if let tmuxPath = appEnv.toolStatus.tmux.path {
+            TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: tmuxSession)
+        }
+        agentStateTracker.clear(workstreamID: workstream.id)
+
+        projects[pi].workstreams[wi].harness = harness
+        onProjectsChanged()
     }
 
     private func performRemove() {
@@ -977,6 +1005,8 @@ private struct WorkstreamRow: View {
     var prTitle: String?
     var prNumber: Int?
     var prState: String?
+    var harness: CodingHarness = .claudeCode
+    var onSwitchHarness: (CodingHarness) -> Void = { _ in }
     let onRemove: () -> Void
     let onPurge: () -> Void
     let onRename: () -> Void
@@ -1092,6 +1122,21 @@ private struct WorkstreamRow: View {
                 }
             }
             Divider()
+            Menu {
+                ForEach(CodingHarness.allCases, id: \.self) { candidate in
+                    Button {
+                        onSwitchHarness(candidate)
+                    } label: {
+                        if candidate == harness {
+                            Label(candidate.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(candidate.displayName)
+                        }
+                    }
+                }
+            } label: {
+                Label("Coding Agent", systemImage: harness.systemImageName)
+            }
             Button(action: onRename) {
                 Label("Rename…", systemImage: "pencil")
             }
@@ -1222,6 +1267,7 @@ private struct NewWorkstreamSheet: View {
     @Binding var error: String
     let projectName: String
     let placeholder: String
+    @Binding var harness: CodingHarness
     let onAdd: () -> Void
     let onCancel: () -> Void
 
@@ -1246,6 +1292,25 @@ private struct NewWorkstreamSheet: View {
                 .textFieldStyle(.roundedBorder)
                 .focused($isFocused)
                 .onSubmit { onAdd() }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Coding Agent")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Coding Agent", selection: $harness) {
+                    ForEach(CodingHarness.allCases, id: \.self) { candidate in
+                        Label {
+                            Text(candidate.displayName)
+                        } icon: {
+                            Image(systemName: candidate.systemImageName)
+                        }
+                        .tag(candidate)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Leave blank for a random name.")

@@ -48,6 +48,14 @@ struct OnboardingView: View {
                             installURL: URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")
                         )
                         PrerequisiteRow(
+                            name: "opencode",
+                            label: "OpenCode",
+                            status: toolStatus.opencode,
+                            version: toolStatus.opencodeVersion,
+                            optional: true,
+                            installURL: URL(string: "https://opencode.ai")
+                        )
+                        PrerequisiteRow(
                             name: "gh",
                             label: "GitHub CLI",
                             status: toolStatus.gh,
