@@ -228,6 +228,36 @@ final class HookEventReceiver: @unchecked Sendable {
         !agentId.isEmpty && agentId != "main"
     }
 
+    /// Maps a tool name (and, when available, its input) to a short human-readable
+    /// activity description for the sidebar roster, e.g. "Editing Foo.swift".
+    static func activityDescription(toolName: String, toolInput: [String: Any]?) -> String? {
+        let filePath = (toolInput?["file_path"] as? String) ?? (toolInput?["notebook_path"] as? String)
+        let baseName = filePath.map { URL(fileURLWithPath: $0).lastPathComponent }
+
+        switch toolName {
+        case "Edit", "Write", "MultiEdit", "NotebookEdit":
+            if let baseName {
+                return String(format: NSLocalizedString("Editing %@", comment: "Agent is modifying a file"), baseName)
+            }
+            return NSLocalizedString("Editing", comment: "Agent is modifying a file")
+        case "Read":
+            if let baseName {
+                return String(format: NSLocalizedString("Reading %@", comment: "Agent is reading a file"), baseName)
+            }
+            return NSLocalizedString("Reading", comment: "Agent is reading a file")
+        case "Grep", "Glob":
+            return NSLocalizedString("Searching", comment: "Agent is searching the codebase")
+        case "Bash":
+            return NSLocalizedString("Running command", comment: "Agent is running a shell command")
+        case "WebFetch", "WebSearch":
+            return NSLocalizedString("Browsing", comment: "Agent is fetching web content")
+        case "TodoWrite":
+            return NSLocalizedString("Planning", comment: "Agent is updating its task plan")
+        default:
+            return nil
+        }
+    }
+
     /// Maps a Claude Code hook event to zero or more `AgentEvent` values.
     /// Must be called on `self.queue`.
     private func mapHookEvent(hookEventName: String, eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
@@ -239,8 +269,9 @@ final class HookEventReceiver: @unchecked Sendable {
                 return []
             }
             let aid = agentId(from: eventInput)
+            let activity = Self.activityDescription(toolName: toolName, toolInput: eventInput["tool_input"] as? [String: Any])
             logger.info("Hook PreToolUse: \(toolName, privacy: .public) agent=\(aid, privacy: .public)")
-            return [AgentEvent.toolStart(agentId: aid, tool: toolName)]
+            return [AgentEvent.toolStart(agentId: aid, tool: toolName, activity: activity)]
 
         case "PostToolUse":
             let aid = agentId(from: eventInput)

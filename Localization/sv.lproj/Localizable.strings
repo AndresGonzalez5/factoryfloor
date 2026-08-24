@@ -395,3 +395,18 @@
 "Approve and Run Setup" = "Godkänn och kör konfiguration";
 "Skip Setup" = "Hoppa över konfiguration";
 "Approve and Start" = "Godkänn och starta";
+
+/* Agent roster */
+"Editing %@" = "Redigerar %@";
+"Editing" = "Redigerar";
+"Reading %@" = "Läser %@";
+"Reading" = "Läser";
+"Searching" = "Söker";
+"Running command" = "Kör kommando";
+"Browsing" = "Surfar";
+"Planning" = "Planerar";
+"Sub-agent" = "Underagent";
+"+%d more" = "+%d till";
+"Stalled" = "Avstannad";
+"Agent may be stalled" = "Agenten kan ha stannat";
+"%lld agents active" = "%lld aktiva agenter";

@@ -395,3 +395,18 @@
 "Approve and Run Setup" = "Aprobar y ejecutar la configuración inicial";
 "Skip Setup" = "Omitir la configuración inicial";
 "Approve and Start" = "Aprobar e iniciar";
+
+/* Agent roster */
+"Editing %@" = "Editando %@";
+"Editing" = "Editando";
+"Reading %@" = "Leyendo %@";
+"Reading" = "Leyendo";
+"Searching" = "Buscando";
+"Running command" = "Ejecutando comando";
+"Browsing" = "Navegando";
+"Planning" = "Planificando";
+"Sub-agent" = "Subagente";
+"+%d more" = "+%d más";
+"Stalled" = "Estancado";
+"Agent may be stalled" = "El agente podría estar estancado";
+"%lld agents active" = "%lld agentes activos";

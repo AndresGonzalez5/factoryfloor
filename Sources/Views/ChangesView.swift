@@ -40,7 +40,7 @@ struct ChangesView: View {
 
     /// Live width of the files-changed sidebar. Init from UserDefaults so it
     /// survives tab switches and relaunches; a divider DragGesture commits the
-    /// final value on release (same pattern as PixelAgentsPanelView).
+    /// final value on release.
     @State private var sidebarWidth: Double
 
     init(workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge) {

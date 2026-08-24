@@ -9,6 +9,9 @@ struct AgentEvent: Codable, Sendable {
     var name: String?
     var palette: Int?
     var tool: String?
+    /// Human-readable description of what the agent is doing right now
+    /// (e.g. "Editing Foo.swift"), derived from the tool and its input.
+    var activity: String?
     var status: String?
     var parentAgentId: String?
 
@@ -28,6 +31,7 @@ struct AgentEvent: Codable, Sendable {
         case name
         case palette
         case tool
+        case activity
         case status
         case parentAgentId
     }
@@ -46,8 +50,8 @@ struct AgentEvent: Codable, Sendable {
         AgentEvent(type: .agentStatus, agentId: agentId, status: status)
     }
 
-    static func toolStart(agentId: String, tool: String) -> AgentEvent {
-        AgentEvent(type: .agentToolStart, agentId: agentId, tool: tool)
+    static func toolStart(agentId: String, tool: String, activity: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentToolStart, agentId: agentId, tool: tool, activity: activity)
     }
 
     static func toolDone(agentId: String) -> AgentEvent {

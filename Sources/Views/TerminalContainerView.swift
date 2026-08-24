@@ -836,13 +836,9 @@ struct TerminalContainerView: View {
 
     private var mainLayout: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                tabBar
-                Divider()
-                tabContent
-            }
+            tabBar
             Divider()
-            PixelAgentsPanelView(projectDirectory: workingDirectory)
+            tabContent
         }
         .task(id: workstreamID) {
             try? await Task.sleep(nanoseconds: 50_000_000)

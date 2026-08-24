@@ -64,7 +64,6 @@ enum WorkstreamArchiver {
         _ workstreamID: UUID,
         in project: inout Project,
         surfaceCache: TerminalSurfaceCache,
-        pixelAgentsCache: PixelAgentsPanelCache? = nil,
         tmuxPath: String?
     ) {
         if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
@@ -73,8 +72,6 @@ enum WorkstreamArchiver {
             let standardizedPath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
             let wsName = ws.name
             let projName = project.name
-            // Evict pixel agents cache entry for this workstream's working directory
-            pixelAgentsCache?.removeEntry(for: worktreePath)
             // Capture the branch name before the worktree is removed
             let branchName = GitOperations.currentBranch(at: worktreePath)
             archivingPaths.insert(standardizedPath)

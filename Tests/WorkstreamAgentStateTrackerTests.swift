@@ -1,0 +1,284 @@
+// ABOUTME: Tests for the per-workstream agent roster and row-level state machine.
+// ABOUTME: Covers run lifecycle, activity text, permission handling, and stall sweeping.
+
+@testable import FactoryFloor
+import XCTest
+
+@MainActor
+final class WorkstreamAgentStateTrackerTests: XCTestCase {
+    private let wsID = UUID()
+    private let projectDir = "/tmp/factoryfloor-test-worktree"
+
+    private var tracker: WorkstreamAgentStateTracker { WorkstreamAgentStateTracker.shared }
+
+    override func setUp() {
+        super.setUp()
+        tracker.resetForTesting()
+    }
+
+    override func tearDown() {
+        tracker.resetForTesting()
+        super.tearDown()
+    }
+
+    /// Routes an event through the tracker, installing the lookup mapping on first use.
+    private func handle(_ event: AgentEvent) {
+        if tracker.workstreamLookup == nil {
+            let expected = WorkstreamAgentStateTracker.normalize(projectDir)
+            let mapped = wsID
+            tracker.workstreamLookup = { dir in
+                WorkstreamAgentStateTracker.normalize(dir) == expected ? mapped : nil
+            }
+        }
+        tracker.handle(projectDir: projectDir, event: event)
+    }
+
+    private func backdateMainRun(secondsAgo: TimeInterval) {
+        tracker._backdateRun(
+            agentId: "main",
+            workstreamID: wsID,
+            lastEventAt: Date().addingTimeInterval(-secondsAgo)
+        )
+    }
+
+    // MARK: - Run lifecycle
+
+    func testPromptSubmitCreatesMainRun() {
+        handle(.waiting(agentId: "main"))
+        let runs = tracker.runs(for: wsID)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertTrue(runs[0].isMain)
+        XCTAssertEqual(runs[0].name, "Claude")
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 1)
+    }
+
+    func testStopRemovesMainRun() {
+        handle(.waiting(agentId: "main"))
+        handle(.idle(agentId: "main"))
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
+    }
+
+    func testSubagentStartStopLifecycle() {
+        handle(.created(agentId: "sub-1", name: "Explore", palette: 2))
+        var runs = tracker.runs(for: wsID)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertFalse(runs[0].isMain)
+        XCTAssertEqual(runs[0].name, "Explore")
+        XCTAssertEqual(runs[0].palette, 2)
+
+        handle(.removed(agentId: "sub-1"))
+        runs = tracker.runs(for: wsID)
+        XCTAssertTrue(runs.isEmpty)
+    }
+
+    func testDuplicateSubagentStartDoesNotDuplicateRun() {
+        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 1)
+    }
+
+    func testMainRunSortsFirstAmongSubagents() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "sub-a", name: "Explore", palette: 1))
+        handle(.created(agentId: "sub-b", name: "Plan", palette: 2))
+        let runs = tracker.runs(for: wsID)
+        XCTAssertEqual(runs.map(\.id), ["main", "sub-a", "sub-b"])
+    }
+
+    func testEventsOutsideTrackedWorkstreamsAreIgnored() {
+        tracker.workstreamLookup = { _ in nil }
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
+    }
+
+    // MARK: - Activity
+
+    func testToolStartSetsActivityAndToolDoneClearsIt() {
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "main", tool: "Edit", activity: "Editing Foo.swift"))
+        XCTAssertEqual(tracker.runs(for: wsID).first?.activity, "Editing Foo.swift")
+
+        handle(.toolDone(agentId: "main"))
+        XCTAssertNil(tracker.runs(for: wsID).first?.activity)
+    }
+
+    func testSubagentActivityIsTrackedSeparately() {
+        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        handle(.toolStart(agentId: "sub-1", tool: "Grep", activity: "Searching"))
+        let sub = tracker.runs(for: wsID).first(where: { $0.id == "sub-1" })
+        XCTAssertEqual(sub?.activity, "Searching")
+    }
+
+    // MARK: - Row-level state
+
+    func testPromptSubmitMarksRowWorking() {
+        handle(.waiting(agentId: "main"))
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    func testStopOnUnselectedWorkstreamNeedsAttention() {
+        handle(.waiting(agentId: "main"))
+        handle(.idle(agentId: "main"))
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.justFinished))
+    }
+
+    func testStopOnSelectedWorkstreamGoesIdle() {
+        tracker.currentSelection = wsID
+        handle(.waiting(agentId: "main"))
+        handle(.idle(agentId: "main"))
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+    }
+
+    func testPermissionStatusThenToolActivityResumesWorking() {
+        tracker.currentSelection = wsID
+        handle(.status(agentId: "main", status: "permissionRequired"))
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
+
+        // Tool activity implies the user answered the prompt.
+        handle(.toolStart(agentId: "main", tool: "Bash"))
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    func testMarkSeenClearsJustFinishedButKeepsPermission() {
+        handle(.idle(agentId: "main"))
+        tracker.markSeen(workstreamID: wsID)
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+
+        handle(.status(agentId: "main", status: "permissionRequired"))
+        tracker.markSeen(workstreamID: wsID)
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
+    }
+
+    // MARK: - Stall detection
+
+    func testStaleRunSweepsToStalled() {
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+
+        tracker.sweepForStalls(now: Date())
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .stalled)
+        XCTAssertEqual(tracker.state(for: wsID), .stalled)
+    }
+
+    func testFreshRunDoesNotStall() {
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: 5)
+
+        tracker.sweepForStalls(now: Date())
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .working)
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    func testStalledSweepSkippedWhileAwaitingPermission() {
+        tracker.currentSelection = wsID
+        handle(.waiting(agentId: "main"))
+        handle(.status(agentId: "main", status: "permissionRequired"))
+        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+
+        tracker.sweepForStalls(now: Date())
+        // Waiting on the user is not stalling.
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .working)
+    }
+
+    func testToolStartUnstallsRunAndRow() {
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+        tracker.sweepForStalls(now: Date())
+        XCTAssertEqual(tracker.state(for: wsID), .stalled)
+
+        handle(.toolStart(agentId: "main", tool: "Read", activity: "Reading Bar.swift"))
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .working)
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    // MARK: - Variant assignment
+
+    func testVariantIndicesAssignedPerType() {
+        handle(.created(agentId: "e1", name: "Explore", palette: 1))
+        handle(.created(agentId: "e2", name: "Explore", palette: 2))
+        handle(.created(agentId: "g1", name: "general-purpose", palette: 3))
+        let runs = tracker.runs(for: wsID)
+        XCTAssertEqual(runs.first(where: { $0.id == "e1" })?.variantIndex, 0)
+        XCTAssertEqual(runs.first(where: { $0.id == "e2" })?.variantIndex, 1)
+        // Independent sequence per type.
+        XCTAssertEqual(runs.first(where: { $0.id == "g1" })?.variantIndex, 0)
+    }
+
+    func testFreedVariantIndexIsReused() {
+        handle(.created(agentId: "e1", name: "Explore", palette: 1))
+        handle(.created(agentId: "e2", name: "Explore", palette: 1))
+        handle(.created(agentId: "e3", name: "Explore", palette: 1))
+        handle(.removed(agentId: "e2"))
+        handle(.created(agentId: "e4", name: "Explore", palette: 1))
+        XCTAssertEqual(tracker.runs(for: wsID).first(where: { $0.id == "e4" })?.variantIndex, 1)
+    }
+
+    func testVariantIndicesKeepCountingWhenOverCapacity() {
+        for i in 1...5 {
+            handle(.created(agentId: "e\(i)", name: "Explore", palette: 1))
+        }
+        let variants = tracker.runs(for: wsID).map(\.variantIndex).sorted()
+        // Raw indices keep counting; cycling to sprite 1 happens at render time.
+        XCTAssertEqual(variants, [0, 1, 2, 3, 4])
+    }
+
+    func testVariantIndexIsStableForRunLifetime() {
+        handle(.created(agentId: "e1", name: "Explore", palette: 1))
+        handle(.toolStart(agentId: "e1", tool: "Grep", activity: "Searching"))
+        XCTAssertEqual(tracker.runs(for: wsID).first?.variantIndex, 0)
+    }
+
+    func testMainAgentVariantIsZero() {
+        handle(.waiting(agentId: "main"))
+        XCTAssertEqual(tracker.runs(for: wsID).first?.variantIndex, 0)
+    }
+
+    func testNextVariantIndexMatchesNormalizedTypeNames() {
+        var runs = tracker.runs(for: wsID)
+        runs = [
+            run(name: "Explore", variant: 0),
+            run(name: "explore", variant: 2),
+        ]
+        XCTAssertEqual(WorkstreamAgentStateTracker.nextVariantIndex(for: "Explore", in: runs), 1)
+        XCTAssertEqual(WorkstreamAgentStateTracker.nextVariantIndex(for: "general-purpose", in: runs), 0)
+    }
+
+    private func run(name: String, variant: Int) -> WorkstreamAgentStateTracker.AgentRun {
+        WorkstreamAgentStateTracker.AgentRun(
+            id: name + String(variant),
+            name: name,
+            palette: 1,
+            isMain: false,
+            variantIndex: variant,
+            state: .working,
+            activity: nil,
+            startedAt: Date(),
+            lastEventAt: Date()
+        )
+    }
+
+    // MARK: - Cleanup
+
+    func testClearRemovesAllStateForWorkstream() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        tracker.clear(workstreamID: wsID)
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+    }
+
+    // MARK: - Activity description mapping
+
+    func testActivityDescriptionMapping() {
+        let filePathInput: [String: Any] = ["file_path": "/repo/Sources/Foo.swift"]
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "Edit", toolInput: filePathInput), String(format: NSLocalizedString("Editing %@", comment: ""), "Foo.swift"))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "Read", toolInput: filePathInput), String(format: NSLocalizedString("Reading %@", comment: ""), "Foo.swift"))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "Grep", toolInput: nil), NSLocalizedString("Searching", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "Bash", toolInput: nil), NSLocalizedString("Running command", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "WebFetch", toolInput: nil), NSLocalizedString("Browsing", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "TodoWrite", toolInput: nil), NSLocalizedString("Planning", comment: ""))
+        // Unknown tools have no canned phrase (falls back to the tool name in the UI).
+        XCTAssertNil(HookEventReceiver.activityDescription(toolName: "SomeCustomTool", toolInput: nil))
+    }
+}

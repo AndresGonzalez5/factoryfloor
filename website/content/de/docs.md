@@ -166,7 +166,6 @@ Factory Floor ist tastaturorientiert. Hier ist alles.
 | ⌘Return | Coding-Agent fokussieren |
 | ⌘T | Neues Terminal |
 | ⌘B | Neuer Browser (startet Entwicklungs-Server) |
-| ⌘J | Pixel-Agenten ein-/ausblenden |
 | ⌘P | Datei suchen (Editor) |
 | ⌘W | Tab schließen |
 | ⌘Shift+W | Workstream archivieren |

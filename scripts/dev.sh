@@ -53,8 +53,6 @@ case "${1:-build}" in
     ;;
   full)
     shift 2>/dev/null || true
-    echo "==> Building pixel-agents..."
-    (cd pixel-agents && npm run build)
     echo "==> Building and running VibeFloor..."
     xcodegen generate
     xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
@@ -128,7 +126,7 @@ case "${1:-build}" in
     echo "  build    Build (debug)"
     echo "  run      Kill and relaunch (optionally with a directory)"
     echo "  br       Build and run"
-    echo "  full     Build pixel-agents, then build and run"
+    echo "  full     Build and run (same as br)"
     echo "  test     Run tests"
     echo "  release  Build Release matching CI (hardened runtime)"
     echo "  release --run  Build and run Release"

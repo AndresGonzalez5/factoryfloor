@@ -221,7 +221,7 @@ echo "  1. Open VibeFloor with a project that has 2+ workstreams"
 echo "  2. Run this script twice with different project_dir values:"
 echo "     ./scripts/test-hook-tracer.sh /path/to/worktree-A"
 echo "     ./scripts/test-hook-tracer.sh /path/to/worktree-B"
-echo "  3. Verify each workstream's pixel agent panel shows the correct events"
+echo "  3. Verify each workstream's sidebar roster shows the correct agents"
 echo "  4. Events for worktree-A should NOT appear in worktree-B's panel"
 
 # --- Summary ---

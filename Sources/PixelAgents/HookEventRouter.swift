@@ -1,4 +1,4 @@
-// ABOUTME: Routes hook events to the correct project's pixel agent coordinator.
+// ABOUTME: Routes hook events to per-project handlers.
 // ABOUTME: Maps normalized project directory paths to event handler callbacks.
 
 import Foundation
@@ -6,11 +6,11 @@ import os
 
 private let logger = Logger(subsystem: "factoryfloor", category: "hook-router")
 
-/// Routes `AgentEvent`s from the `HookEventReceiver` to the correct project handler.
+/// Routes `AgentEvent`s from the `HookEventReceiver` to registered handlers.
 ///
-/// Each `PixelAgentsPanelView.Coordinator` registers its project directory and a
-/// handler callback. When a hook event arrives, the router normalizes the path and
-/// dispatches to the matching handler on the main queue.
+/// Handlers are keyed by normalized project directory. When a hook event
+/// arrives, the router normalizes the path and dispatches to the matching
+/// handler on the main queue.
 ///
 /// Thread safety: protected by `NSLock`.
 final class HookEventRouter: @unchecked Sendable {
