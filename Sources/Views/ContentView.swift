@@ -94,7 +94,6 @@ struct ContentView: View {
     }
 
     @StateObject private var surfaceCache = TerminalSurfaceCache()
-    @StateObject private var pixelAgentsCache = PixelAgentsPanelCache()
     @StateObject private var appEnvironment = AppEnvironment()
     @StateObject private var updateChecker = UpdateChecker()
     @ObservedObject private var agentStateTracker = WorkstreamAgentStateTracker.shared
@@ -223,9 +222,9 @@ struct ContentView: View {
                 for project in projects {
                     for ws in project.workstreams {
                         surfaceCache.removeWorkstreamSurfaces(for: ws.id)
+                        agentStateTracker.clear(workstreamID: ws.id)
                     }
                 }
-                pixelAgentsCache.removeAllEntries()
                 projects.removeAll()
                 selectionBeforeSettings = nil
                 selection = .settings
@@ -303,8 +302,7 @@ struct ContentView: View {
                     if let project = projects.first(where: { $0.id == id }) {
                         for ws in project.workstreams {
                             surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                            let workDir = ws.workingDirectory(projectDirectory: project.directory)
-                            pixelAgentsCache.removeEntry(for: workDir)
+                            agentStateTracker.clear(workstreamID: ws.id)
                         }
                     }
                 }
@@ -384,7 +382,6 @@ struct ContentView: View {
             detailView
         }
         .environmentObject(surfaceCache)
-        .environmentObject(pixelAgentsCache)
         .environmentObject(appEnvironment)
         .environmentObject(updateChecker)
         .environmentObject(updater)
@@ -651,6 +648,7 @@ struct ContentView: View {
         guard let wsID = workstreamToRemove,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         WorkstreamArchiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
+        agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
         workstreamToRemove = nil
     }
@@ -660,6 +658,7 @@ struct ContentView: View {
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[projectIndex].id
         WorkstreamArchiver.purge(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
+        agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
         if case let .workstream(id) = selection, id == wsID {
             selection = .project(projectID)

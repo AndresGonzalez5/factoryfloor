@@ -174,7 +174,6 @@ Factory Floor is keyboard-first. Here's everything.
 | ⌘B | New Browser (starts the dev server) |
 | ⌘O | New Editor |
 | ⌘P | Find File (Editor) |
-| ⌘J | Toggle pixel agents |
 | ⌘S | Save (Editor) |
 | ⌘Shift+S | Save As (Editor) |
 | ⌘W | Close tab |

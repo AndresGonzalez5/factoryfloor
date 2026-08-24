@@ -1,5 +1,5 @@
 #!/bin/bash
-# ABOUTME: Test script to verify the full hook-based pixel agent event lifecycle.
+# ABOUTME: Test script to verify the full hook-based agent event lifecycle.
 # ABOUTME: Posts all 9 event types in sequence and verifies HTTP 200 responses.
 
 set -euo pipefail

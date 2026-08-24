@@ -201,21 +201,33 @@ struct ProjectSidebar: View {
                         let workstream = projects[pIdx].workstreams[wIdx]
                         let branch = appEnv.branchName(for: workstream.worktreePath)
                         let pr = branch.flatMap { appEnv.githubPR(for: project.directory, branch: $0) }
-                        WorkstreamRow(
-                            name: workstream.label,
-                            branchName: branch,
-                            worktreePath: workstream.worktreePath,
-                            isPathValid: appEnv.isPathValid(workstream.worktreePath),
-                            agentState: agentStateTracker.state(for: workstream.id),
-                            githubURL: appEnv.githubURL(for: project.directory),
-                            taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
-                            prTitle: pr?.title,
-                            prNumber: pr?.number,
-                            prState: pr?.state,
-                            onRemove: { workstreamToRemove = workstream.id },
-                            onPurge: { confirmPurge(workstream) },
-                            onRename: { promptRenameWorkstream(workstream) }
-                        )
+                        let wsRuns = agentStateTracker.runs(for: workstream.id)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            WorkstreamRow(
+                                name: workstream.label,
+                                branchName: branch,
+                                worktreePath: workstream.worktreePath,
+                                isPathValid: appEnv.isPathValid(workstream.worktreePath),
+                                agentState: agentStateTracker.state(for: workstream.id),
+                                activeRunCount: wsRuns.count,
+                                githubURL: appEnv.githubURL(for: project.directory),
+                                taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
+                                prTitle: pr?.title,
+                                prNumber: pr?.number,
+                                prState: pr?.state,
+                                onRemove: { workstreamToRemove = workstream.id },
+                                onPurge: { confirmPurge(workstream) },
+                                onRename: { promptRenameWorkstream(workstream) }
+                            )
+
+                            if !wsRuns.isEmpty {
+                                WorkstreamAgentRosterView(runs: wsRuns) {
+                                    selectAndFocusAgent(workstreamID: workstream.id)
+                                }
+                                .padding(.leading, 12)
+                            }
+                        }
                         .tag(SidebarSelection.workstream(workstream.id))
                         .padding(.leading, 28)
                     }
@@ -593,7 +605,6 @@ struct ProjectSidebar: View {
     }
 
     @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
-    @EnvironmentObject private var pixelAgentsCache: PixelAgentsPanelCache
     @EnvironmentObject private var appEnv: AppEnvironment
     @EnvironmentObject private var updateChecker: UpdateChecker
     @EnvironmentObject private var updater: Updater
@@ -602,6 +613,20 @@ struct ProjectSidebar: View {
     private func confirmPurge(_ workstream: Workstream) {
         purgeWarningMessage = WorkstreamArchiver.purgeWarning(for: workstream)
         workstreamToPurge = workstream.id
+    }
+
+    /// Selects a workstream and focuses its Coding Agent tab. When the
+    /// workstream isn't already selected, focus is deferred briefly so the
+    /// detail pane can swap to the new container first.
+    private func selectAndFocusAgent(workstreamID: UUID) {
+        if case let .workstream(selected) = selection, selected == workstreamID {
+            NotificationCenter.default.post(name: .focusAgent, object: nil)
+            return
+        }
+        selection = SidebarSelection.workstream(workstreamID)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(name: .focusAgent, object: nil)
+        }
     }
 
     private func promptRenameWorkstream(_ workstream: Workstream) {
@@ -646,6 +671,7 @@ struct ProjectSidebar: View {
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
         WorkstreamArchiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
             selection = projects[pi].workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
@@ -659,6 +685,7 @@ struct ProjectSidebar: View {
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
         WorkstreamArchiver.purge(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
             selection = projects[pi].workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
@@ -681,8 +708,7 @@ struct ProjectSidebar: View {
         if let project = projects.first(where: { $0.id == id }) {
             for ws in project.workstreams {
                 surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                let workDir = ws.workingDirectory(projectDirectory: project.directory)
-                pixelAgentsCache.removeEntry(for: workDir)
+                agentStateTracker.clear(workstreamID: ws.id)
             }
         }
         projects.removeAll { $0.id == id }
@@ -945,6 +971,7 @@ private struct WorkstreamRow: View {
     var worktreePath: String?
     let isPathValid: Bool
     var agentState: WorkstreamAgentStateTracker.AgentRunState = .idle
+    var activeRunCount: Int = 0
     var githubURL: URL?
     var taskDescription: String?
     var prTitle: String?
@@ -977,9 +1004,22 @@ private struct WorkstreamRow: View {
         return nil
     }
 
+    /// Color for the live-agent count badge, matching the row state.
+    private var runCountColor: Color {
+        if case .stalled = agentState { return .orange }
+        return .green
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             AgentStateIndicator(state: agentState, isPathValid: isPathValid)
+
+            if activeRunCount > 0 {
+                Text("×\(activeRunCount)")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundStyle(runCountColor)
+                    .accessibilityLabel(Text("\(activeRunCount) agents active"))
+            }
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 4) {

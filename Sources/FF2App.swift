@@ -367,11 +367,6 @@ struct FF2App: App {
                 }
                 .keyboardShortcut("d", modifiers: .command)
 
-                Button("Toggle Pixel Agents") {
-                    NotificationCenter.default.post(name: .togglePixelAgents, object: nil)
-                }
-                .keyboardShortcut("j", modifiers: .command)
-
                 Button("Start/Rerun") {
                     NotificationCenter.default.post(name: .rerunScript, object: nil)
                 }
