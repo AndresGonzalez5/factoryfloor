@@ -405,11 +405,17 @@
 "Running command" = "Running command";
 "Browsing" = "Browsing";
 "Planning" = "Planning";
+"Delegating" = "Delegating";
 "Sub-agent" = "Sub-agent";
 "+%d more" = "+%d more";
 "Stalled" = "Stalled";
+"Working" = "Working";
+"Waiting for approval" = "Waiting for approval";
+"Done" = "Done";
+"Idle" = "Idle";
 "Agent may be stalled" = "Agent may be stalled";
 "Context window usage" = "Context window usage";
+"Context: %1$lld tokens · %2$lld%%" = "Context: %1$lld tokens · %2$lld%%";
 "%lld agents active" = "%lld agents active";
 
 /* Multi-harness support */

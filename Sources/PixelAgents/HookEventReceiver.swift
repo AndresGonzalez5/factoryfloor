@@ -280,8 +280,12 @@ final class HookEventReceiver: @unchecked Sendable {
             return NSLocalizedString("Browsing", comment: "Agent is fetching web content")
         case "todowrite", "todoread":
             return NSLocalizedString("Planning", comment: "Agent is updating its task plan")
+        case "task":
+            return NSLocalizedString("Delegating", comment: "Agent is delegating to a subagent")
         default:
-            return nil
+            // Custom/MCP tools surface verbatim so the row always says
+            // something specific about what's running.
+            return toolName.isEmpty ? nil : toolName
         }
     }
 
@@ -416,6 +420,8 @@ final class HookEventReceiver: @unchecked Sendable {
             return [AgentEvent.idle(agentId: aid)]
 
         case "permission_required":
+            // Permission and question prompts both block on user input;
+            // they surface identically as row-level attention.
             return [AgentEvent.status(agentId: "main", status: "permissionRequired")]
 
         case "session_created":

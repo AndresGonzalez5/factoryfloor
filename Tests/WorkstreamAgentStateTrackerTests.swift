@@ -192,6 +192,48 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state(for: wsID), .working)
     }
 
+    /// A stale main run waiting on a live subagent is delegation, not a
+    /// stall — the row keeps its Working state until the whole workstream
+    /// goes quiet.
+    func testFreshSubagentKeepsRowWorkingWhenMainGoesQuiet() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "ses_build", name: "build", palette: 1))
+        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+
+        tracker.sweepForStalls(now: Date())
+        XCTAssertEqual(tracker.runs(for: wsID).first { $0.isMain }?.state, .stalled)
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+
+        // Once the subagent goes quiet too, the row stalls.
+        tracker._backdateRun(
+            agentId: "ses_build",
+            workstreamID: wsID,
+            lastEventAt: Date().addingTimeInterval(-(WorkstreamAgentStateTracker.stallThreshold + 10))
+        )
+        tracker.sweepForStalls(now: Date())
+        XCTAssertEqual(tracker.state(for: wsID), .stalled)
+    }
+
+    /// The main run's final context figures must outlive the roster clear
+    /// at turn end so the row's context bar persists at Done/Idle.
+    func testContextUsageSurvivesMainIdle() {
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000
+        ))
+        XCTAssertNotNil(tracker.mainContextUsage(for: wsID))
+
+        handle(.idle(agentId: "main"))
+        XCTAssertTrue(tracker.runs(for: wsID).isEmpty)
+
+        let usage = tracker.mainContextUsage(for: wsID)
+        XCTAssertNotNil(usage)
+        XCTAssertEqual(usage?.usedTokens, 42_000)
+        XCTAssertEqual(usage?.limitTokens, 200_000)
+    }
+
     // MARK: - Variant assignment
 
     func testVariantIndicesAssignedPerType() {
@@ -278,8 +320,8 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "Bash", toolInput: nil), NSLocalizedString("Running command", comment: ""))
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "WebFetch", toolInput: nil), NSLocalizedString("Browsing", comment: ""))
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "TodoWrite", toolInput: nil), NSLocalizedString("Planning", comment: ""))
-        // Unknown tools have no canned phrase (falls back to the tool name in the UI).
-        XCTAssertNil(HookEventReceiver.activityDescription(toolName: "SomeCustomTool", toolInput: nil))
+        // Unknown tools surface verbatim so the row always says something specific.
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "SomeCustomTool", toolInput: nil), "SomeCustomTool")
     }
 
     // MARK: - OpenCode (lowercase tool names, per-harness run names)
@@ -291,6 +333,14 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "grep", toolInput: nil), NSLocalizedString("Searching", comment: ""))
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "bash", toolInput: nil), NSLocalizedString("Running command", comment: ""))
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "todowrite", toolInput: nil), NSLocalizedString("Planning", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "task", toolInput: nil), NSLocalizedString("Delegating", comment: ""))
+    }
+
+    /// Unmapped custom/MCP tools surface verbatim so the row always shows
+    /// something specific; an empty name still yields no activity.
+    func testActivityDescriptionFallsBackToToolNameVerbatim() {
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "mcp_custom_lookup", toolInput: nil), "mcp_custom_lookup")
+        XCTAssertNil(HookEventReceiver.activityDescription(toolName: "", toolInput: nil))
     }
 
     func testOpencodeRunUsesProvidedHarnessName() {
@@ -298,6 +348,38 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         event.name = "OpenCode"
         handle(event)
         XCTAssertEqual(tracker.runs(for: wsID).first?.name, "OpenCode")
+    }
+
+    /// OpenCode's message.updated can precede any tool/prompt event; the
+    /// info-only event must still create the main run so its context
+    /// figures land and the row's context bar can appear.
+    func testAgentInfoCreatesMissingMainRunWithContext() {
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000
+        ))
+        let runs = tracker.runs(for: wsID)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertTrue(runs[0].isMain)
+        XCTAssertEqual(runs[0].name, "OpenCode")
+        XCTAssertEqual(runs[0].model, "claude-sonnet-4-5")
+        XCTAssertEqual(runs[0].contextUsedTokens, 42_000)
+        XCTAssertEqual(runs[0].contextLimitTokens, 200_000)
+        XCTAssertNotNil(tracker.mainContextUsage(for: wsID))
+    }
+
+    /// Subagents are never created from attribute-only events — that path
+    /// must not produce ghost roster entries.
+    func testAgentInfoDoesNotCreateSubagentRuns() {
+        handle(AgentEvent.info(
+            agentId: "ses_child",
+            name: "Explore",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 1_000
+        ))
+        XCTAssertTrue(tracker.runs(for: wsID).isEmpty)
     }
 
     func testChildIdleRemovesOnlyThatChild() {
@@ -345,10 +427,13 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state(for: wsID), .working)
     }
 
-    func testAgentInfoDoesNotCreateGhostRuns() {
+    /// Attribute-only events may create the MAIN run (so OpenCode's early
+    /// message.updated context lands) but never subagent runs.
+    func testAgentInfoDoesNotCreateSubagentGhostRuns() {
         handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "m"))
         handle(AgentEvent.info(agentId: "ses_unknown", name: "build", model: "m"))
-        XCTAssertTrue(tracker.runs(for: wsID).isEmpty)
+        XCTAssertEqual(tracker.runs(for: wsID).map(\.id), ["main"])
+        XCTAssertTrue(tracker.runs(for: wsID)[0].isMain)
         XCTAssertEqual(tracker.state(for: wsID), .idle)
     }
 
@@ -507,7 +592,12 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.mainContextUsage(for: wsID)?.usedTokens, 100)
     }
 
-    func testMainContextUsageNilWithoutLiveMainRun() {
+    /// Usage is nil until the harness has reported figures — but once it
+    /// has, the last reading persists past turn end (the row's bar dims
+    /// instead of vanishing at Done/Idle).
+    func testMainContextUsageNilUntilReportedThenPersists() {
+        XCTAssertNil(tracker.mainContextUsage(for: wsID))
+
         handle(.waiting(agentId: "main"))
         handle(AgentEvent.info(
             agentId: "main",
@@ -517,6 +607,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         ))
         handle(.idle(agentId: "main"))
 
-        XCTAssertNil(tracker.mainContextUsage(for: wsID))
+        let usage = tracker.mainContextUsage(for: wsID)
+        XCTAssertEqual(usage?.usedTokens, 42_000)
     }
 }

@@ -217,7 +217,12 @@ struct ProjectSidebar: View {
                                 hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
                                 portraitName: workstream.harness == .opencode ? "OpenCode" : "Claude",
                                 mainActivity: mainRun?.activity,
-                                mainContextUsage: mainRun == nil ? nil : agentStateTracker.mainContextUsage(for: workstream.id),
+                                // Passed regardless of whether the main run
+                                // is still rostered: the tracker keeps the
+                                // last reading after a turn ends so the bar
+                                // persists (dimmed) at Done/Idle.
+                                mainContextUsage: agentStateTracker.mainContextUsage(for: workstream.id),
+                                startedAt: mainRun?.startedAt,
                                 githubURL: appEnv.githubURL(for: project.directory),
                                 taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
                                 prTitle: pr?.title,
@@ -1008,6 +1013,9 @@ private struct WorkstreamRow: View {
     var portraitName: String = "Claude"
     var mainActivity: String?
     var mainContextUsage: WorkstreamAgentStateTracker.ContextUsage?
+    /// When this workstream's main run was first seen this launch; drives
+    /// the status line's ticking elapsed time.
+    var startedAt: Date?
     var githubURL: URL?
     var taskDescription: String?
     var prTitle: String?
@@ -1042,18 +1050,75 @@ private struct WorkstreamRow: View {
         return nil
     }
 
-    /// The main session's context meter shows while the agent is actively
-    /// spending context (working or stalled); idle/attention states hide it.
+    /// The main session's context bar stays visible once usage is known so a
+    /// finished turn's consumption remains readable; it dims while the agent
+    /// isn't actively spending context.
     private var showsMainContextMeter: Bool {
-        guard mainContextUsage != nil else { return false }
+        mainContextUsage != nil && isPathValid && hasLiveSession
+    }
+
+    /// True while the agent is actively spending context this turn.
+    private var isAgentActive: Bool {
         switch agentState {
-        case .working, .stalled: return true
-        case .idle, .needsAttention: return false
+        case .working, .stalled: true
+        case .idle, .needsAttention: false
         }
     }
 
+    /// Dot/word color mirroring the portrait ring; nil when dormant.
+    private var statusColor: Color? {
+        MainAgentPortrait.ringColor(for: agentState, hasLiveSession: hasLiveSession)
+    }
+
+    private var statusText: LocalizedStringKey? {
+        switch agentState {
+        case .working: "Working"
+        case .stalled: "Stalled"
+        case .needsAttention(.permission): "Waiting for approval"
+        case .needsAttention(.justFinished): "Done"
+        case .idle where hasLiveSession: "Idle"
+        case .idle: nil
+        }
+    }
+
+    /// "● Working · Editing AuthView.swift · 4m" — colored dot + localized
+    /// status word, current tool activity while active, and time since the
+    /// run started. Rendered only for workstreams with a live session.
+    private func statusMeta(word: LocalizedStringKey, color: Color) -> some View {
+        HStack(spacing: 0) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+                .padding(.trailing, 4)
+
+            Text(word)
+                .foregroundStyle(color)
+
+            if isAgentActive, let activity = mainActivity {
+                metaSeparator
+                Text(activity)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            if let startedAt {
+                metaSeparator
+                ElapsedLabel(startedAt: startedAt, fontSize: 9)
+            }
+        }
+        .font(.system(size: 9, design: .monospaced))
+        .lineLimit(1)
+    }
+
+    private var metaSeparator: some View {
+        Text("·")
+            .foregroundStyle(.quaternary)
+            .padding(.horizontal, 3)
+    }
+
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(alignment: .center, spacing: 6) {
             MainAgentPortrait(
                 state: agentState,
                 isPathValid: isPathValid,
@@ -1061,14 +1126,13 @@ private struct WorkstreamRow: View {
                 portraitName: portraitName
             )
 
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 4) {
-                    Text(headline)
-                        .font(.system(size: 12))
-                        .strikethrough(!isPathValid)
-                        .foregroundStyle(isPathValid ? .primary : .secondary)
-                        .lineLimit(1)
-                }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(headline)
+                    .font(.system(size: 11))
+                    .strikethrough(!isPathValid)
+                    .foregroundStyle(isPathValid ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .lineLimit(2)
+
                 if let subtitle {
                     HStack(spacing: 3) {
                         if prState == "MERGED" {
@@ -1082,26 +1146,21 @@ private struct WorkstreamRow: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(prState == "MERGED" ? AnyShapeStyle(.purple) : AnyShapeStyle(.tertiary))
                 }
-                if let mainActivity {
-                    Text(mainActivity)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+
+                if let statusText, let statusColor {
+                    statusMeta(word: statusText, color: statusColor)
+                }
+
+                if showsMainContextMeter, let usage = mainContextUsage {
+                    ContextMeter(usage: usage, style: .bar)
+                        .opacity(isAgentActive ? 1 : 0.45)
+                        .animation(.easeInOut(duration: 0.2), value: isAgentActive)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            if showsMainContextMeter, let usage = mainContextUsage {
-                ContextMeter(usage: usage)
-                    // Slide left while hovering so the remove button, which
-                    // overlays the trailing edge, doesn't cover the meter.
-                    .padding(.trailing, isHovering ? 26 : 2)
-                    .animation(.easeInOut(duration: 0.15), value: isHovering)
-            }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) {
             SidebarIconButton(icon: "xmark", action: onRemove)
                 .accessibilityLabel("Remove workstream")

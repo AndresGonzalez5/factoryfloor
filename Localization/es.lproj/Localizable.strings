@@ -405,11 +405,17 @@
 "Running command" = "Ejecutando comando";
 "Browsing" = "Navegando";
 "Planning" = "Planificando";
+"Delegating" = "Delegando";
 "Sub-agent" = "Subagente";
 "+%d more" = "+%d más";
 "Stalled" = "Estancado";
+"Working" = "Trabajando";
+"Waiting for approval" = "Esperando aprobación";
+"Done" = "Hecho";
+"Idle" = "Inactivo";
 "Agent may be stalled" = "El agente podría estar estancado";
 "Context window usage" = "Uso de la ventana de contexto";
+"Context: %1$lld tokens · %2$lld%%" = "Contexto: %1$lld tokens · %2$lld%%";
 "%lld agents active" = "%lld agentes activos";
 
 /* Multi-harness support */

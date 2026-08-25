@@ -1,20 +1,22 @@
-// ABOUTME: Compact per-agent mini cards shown under an expanded workstream
-// ABOUTME: row while subagents are live in that workstream.
+// ABOUTME: Per-agent mini cards shown under an expanded workstream row while
+// ABOUTME: subagents are live in that workstream.
 
 import SwiftUI
 
-/// One mini card per live SUBAGENT run: portrait, name/model, current
-/// activity, and either a context meter or elapsed time. The main agent is
-/// not listed — its portrait, activity, and context meter live on the
-/// workstream row itself. Cards exist exactly while their run is live —
-/// Claude Code's stop hooks remove them the moment an agent finishes.
+/// One card per live SUBAGENT run, mirroring the workstream row's design in
+/// miniature: ringed pixel portrait, type name, a status meta line (dot +
+/// word · activity · elapsed), and a context bar when the harness reports
+/// per-run token figures. The main agent is not listed — its portrait,
+/// status line, and context bar live on the workstream row itself. Cards
+/// exist exactly while their run is live — Claude Code's stop hooks remove
+/// them the moment an agent finishes.
 struct WorkstreamAgentRosterView: View {
     let runs: [WorkstreamAgentStateTracker.AgentRun]
     /// Called when a roster line is clicked: selects the workstream and
     /// focuses its Coding Agent tab.
     let onSelect: () -> Void
 
-    private static let maxVisibleLines = 4
+    private static let maxVisibleLines = 3
 
     private var visibleRuns: [WorkstreamAgentStateTracker.AgentRun] {
         Array(runs.prefix(Self.maxVisibleLines))
@@ -35,7 +37,8 @@ struct WorkstreamAgentRosterView: View {
                 Text(String(format: NSLocalizedString("+%d more", comment: "Additional agents beyond the visible roster lines"), hiddenCount))
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
-                    .padding(.leading, 28)
+                    // Clears the 30pt art column so the label aligns with names.
+                    .padding(.leading, 36)
                     .onTapGesture(perform: onSelect)
             }
         }
@@ -57,7 +60,8 @@ struct WorkstreamAgentRosterView: View {
 private struct RosterCard: View {
     let run: WorkstreamAgentStateTracker.AgentRun
 
-    /// Child sessions carry per-run context figures from the harness.
+    /// Child sessions carry per-run context figures from the harness;
+    /// cards without them simply render shorter.
     private var contextUsage: WorkstreamAgentStateTracker.ContextUsage? {
         guard let used = run.contextUsedTokens,
               let limit = run.contextLimitTokens,
@@ -65,53 +69,79 @@ private struct RosterCard: View {
         return WorkstreamAgentStateTracker.ContextUsage(usedTokens: used, limitTokens: limit)
     }
 
+    private var statusColor: Color {
+        switch run.state {
+        case .working: return .blue
+        case .stalled: return .yellow
+        }
+    }
+
+    private var statusWord: LocalizedStringKey {
+        switch run.state {
+        case .working: return "Working"
+        case .stalled: return "Stalled"
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 6) {
             RosterAvatar(name: run.name, palette: run.palette, variant: run.variantIndex, state: run.state)
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(run.name)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(run.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
 
-                    if let model = run.model {
-                        Text(model)
-                            .font(.system(size: 8, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: 60, alignment: .leading)
-                            .help(run.name + " · " + model)
-                            .accessibilityHidden(true)
-                    }
-                }
+                statusMeta
 
-                if let activity = run.activity {
-                    Text(activity)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                if let usage = contextUsage {
+                    ContextMeter(usage: usage, style: .bar)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 4)
-
-            VStack(alignment: .trailing, spacing: 2) {
-                if run.state == .stalled {
-                    Text("Stalled")
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.orange)
-                } else if let usage = contextUsage {
-                    ContextMeter(usage: usage)
-                } else {
-                    ElapsedLabel(startedAt: run.startedAt)
-                }
-            }
+            Spacer(minLength: 0)
         }
+        .help(tooltipText)
         .padding(.vertical, 2)
+    }
+
+    /// "● Working · Editing Foo.swift · 2m" — same grammar as the workstream
+    /// row's status line, driven by this run's own state.
+    private var statusMeta: some View {
+        HStack(spacing: 0) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 5, height: 5)
+                .padding(.trailing, 4)
+
+            Text(statusWord)
+                .foregroundStyle(statusColor)
+
+            if let activity = run.activity {
+                metaSeparator
+                Text(activity)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            metaSeparator
+            ElapsedLabel(startedAt: run.startedAt, fontSize: 9)
+        }
+        .font(.system(size: 9, design: .monospaced))
+        .lineLimit(1)
+    }
+
+    private var metaSeparator: some View {
+        Text("·")
+            .foregroundStyle(.quaternary)
+            .padding(.horizontal, 3)
+    }
+
+    private var tooltipText: String {
+        [run.name, run.model].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -125,56 +155,70 @@ private struct RosterAvatar: View {
 
     @State private var isPulsing = false
 
+    /// Mirrors MainAgentPortrait's state palette (blue working, yellow stalled).
     private var ringColor: Color {
         switch state {
-        case .working: return .green
-        case .stalled: return .orange
+        case .working: return .blue
+        case .stalled: return .yellow
         }
     }
 
     var body: some View {
         ZStack {
             Circle()
-                .strokeBorder(ringColor.opacity(isPulsing && state == .working ? 0.35 : 0.9), lineWidth: 1)
+                .strokeBorder(
+                    ringColor.opacity(isPulsing && state == .working ? 0.35 : 0.9),
+                    lineWidth: 1.5
+                )
 
-            if let image = AgentSpriteStore.shared.avatar(name: name, palette: palette, variant: variant) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-                    .padding(2)
-            } else {
-                Image(systemName: "person.crop.circle.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
+            portrait
+                .padding(1)
         }
-        .frame(width: 20, height: 20)
+        .frame(width: 30, height: 30)
         .onChange(of: state) { _, newValue in
             isPulsing = (newValue == .working)
         }
         .onAppear {
             isPulsing = (state == .working)
         }
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: isPulsing)
+        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
+    }
+
+    private var portrait: some View {
+        Group {
+            if let image = AgentSpriteStore.shared.avatar(name: name, palette: palette, variant: variant) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.none)
+                    .scaledToFill()
+            } else {
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .scaledToFill()
+            }
+        }
+        .clipShape(Circle())
     }
 }
 
 // MARK: - Elapsed time
 
-private struct ElapsedLabel: View {
+/// Ticking "4m"-style label counting up from a run's start. Shared by roster
+/// cards and the workstream row's status line.
+struct ElapsedLabel: View {
     let startedAt: Date
+    var fontSize: CGFloat = 8
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { _ in
             Text(Self.elapsed(from: startedAt))
-                .font(.system(size: 8, design: .monospaced))
+                .font(.system(size: fontSize, design: .monospaced))
                 .foregroundStyle(.quaternary)
         }
         .accessibilityHidden(true)
     }
 
-    private static func elapsed(from start: Date) -> String {
+    static func elapsed(from start: Date) -> String {
         let interval = max(0, Date().timeIntervalSince(start))
         let minutes = Int(interval) / 60
         if minutes >= 60 {

@@ -6,6 +6,10 @@ import SwiftUI
 /// Sidebar portrait for a workstream's main agent: the harness's pixel
 /// character inside a circular state ring. Presence tiers run from full color
 /// while working down to near-transparent once dormant.
+///
+/// State palette (mirrored by the row's status word dot):
+/// blue = working, yellow = stalled, orange = awaiting permission,
+/// green = finished, gray = idle with a live session.
 struct MainAgentPortrait: View {
     let state: WorkstreamAgentStateTracker.AgentRunState
     let isPathValid: Bool
@@ -13,7 +17,23 @@ struct MainAgentPortrait: View {
     let hasLiveSession: Bool
     /// Agent type resolving the sprite ("Claude", "OpenCode", …).
     let portraitName: String
-    var size: CGFloat = 28
+    var size: CGFloat = 38
+
+    /// Ring/status-dot color for a state, mirroring the tiers below.
+    /// Nil when the row is dormant (no live session).
+    static func ringColor(
+        for state: WorkstreamAgentStateTracker.AgentRunState,
+        hasLiveSession: Bool
+    ) -> Color? {
+        switch state {
+        case .working: .blue
+        case .stalled: .yellow
+        case .needsAttention(.permission): .orange
+        case .needsAttention(.justFinished): .green
+        case .idle where hasLiveSession: .secondary
+        case .idle: nil
+        }
+    }
 
     @State private var isPulsing = false
 
@@ -41,12 +61,12 @@ struct MainAgentPortrait: View {
     private var statefulPortrait: some View {
         switch state {
         case .working:
-            ringedPortrait(color: .green, pulses: true)
-                .shadow(color: .green.opacity(isPulsing ? 0.2 : 0.5), radius: 3)
+            ringedPortrait(color: .blue, pulses: true)
+                .shadow(color: .blue.opacity(isPulsing ? 0.2 : 0.5), radius: 3)
                 .accessibilityLabel(Text("Agent is working"))
 
         case .stalled:
-            ringedPortrait(color: .orange, pulses: true)
+            ringedPortrait(color: .yellow, pulses: true)
                 .accessibilityLabel(Text("Agent may be stalled"))
 
         case .needsAttention(.permission):
@@ -55,7 +75,7 @@ struct MainAgentPortrait: View {
                 .accessibilityLabel(Text("Agent is awaiting permission"))
 
         case .needsAttention(.justFinished):
-            ringedPortrait(color: .blue)
+            ringedPortrait(color: .green)
                 .accessibilityLabel(Text("Agent finished — needs review"))
 
         case .idle where hasLiveSession:

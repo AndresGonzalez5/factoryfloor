@@ -258,8 +258,17 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
         case .agentInfo:
             // Attribute-only refresh: update an existing run's name/model
-            // without touching state or creating ghost runs.
-            if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
+            // without touching state. Info can also arrive before any tool
+            // or prompt event (OpenCode streams message.updated early); in
+            // that case create the MAIN run so its context figures land —
+            // subagents are still never created from info alone.
+            if event.agentId == "main", !list.contains(where: { $0.id == "main" }) {
+                upsert("main", name: event.name) { run in
+                    run.model = event.model ?? run.model
+                    run.contextUsedTokens = event.contextUsedTokens ?? run.contextUsedTokens
+                    run.contextLimitTokens = event.contextLimitTokens ?? run.contextLimitTokens
+                }
+            } else if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
                 if let name = event.name, !name.isEmpty, name != list[idx].name {
                     list[idx].name = name
                 }
@@ -276,9 +285,18 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             }
 
         case .agentIdle:
-            // Main going idle ends the whole turn; a child idling removes only
-            // that child.
+            // Main going idle ends the whole turn; a child idling removes
+            // only that child. Snapshot the main run's last known context
+            // figures first — OpenCode reports them per-run only, and the
+            // roster is about to clear, but the row keeps showing usage
+            // until the next turn.
             if event.agentId == "main" {
+                if let main = list.first(where: \.isMain),
+                   let used = main.contextUsedTokens,
+                   let limit = main.contextLimitTokens,
+                   limit > 0 {
+                    contextUsage[wsID] = ContextUsage(usedTokens: used, limitTokens: limit)
+                }
                 list.removeAll()
             } else {
                 list.removeAll { $0.id == event.agentId }
@@ -386,9 +404,15 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             }
             guard changed else { continue }
             rosters[wsID] = updated
-            // Surface a stalled main run at the row level unless something
-            // more important already needs attention there.
+            // Surface a stalled main run at row level unless something more
+            // important already needs attention there. A fresh sibling run
+            // (a live subagent) means the workstream is still actively
+            // working through it — keep the row Working.
+            let hasFreshActivity = updated.contains { run in
+                run.state == .working && run.lastEventAt >= cutoff
+            }
             if updated.contains(where: { $0.isMain && $0.state == .stalled }),
+               !hasFreshActivity,
                case .working = rowState
             {
                 states[wsID] = .stalled
