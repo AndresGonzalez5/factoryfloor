@@ -162,4 +162,57 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(loaded.first?.workstreams.count, 1)
         XCTAssertEqual(loaded.first?.workstreams.first?.name, "dev")
     }
+
+    // MARK: - Harness selection
+
+    func testWorkstreamDefaultsToClaudeCode() {
+        XCTAssertEqual(Workstream(name: "main").harness, .claudeCode)
+    }
+
+    func testWorkstreamHarnessRoundTrip() throws {
+        var ws = Workstream(name: "main", harness: .opencode)
+        ws.worktreePath = "/tmp/ws"
+        let data = try JSONEncoder().encode(ws)
+        let decoded = try JSONDecoder().decode(Workstream.self, from: data)
+        XCTAssertEqual(decoded.harness, .opencode)
+        XCTAssertEqual(decoded.worktreePath, "/tmp/ws")
+    }
+
+    func testLegacyWorkstreamJSONWithoutHarnessDecodesToClaudeCode() throws {
+        // Mirrors the pre-multi-harness Workstream shape stored in UserDefaults.
+        struct LegacyWorkstream: Codable {
+            let id: UUID
+            var name: String
+            var displayName: String?
+            var worktreePath: String?
+            var bypassPermissions: Bool
+            var lastAccessedAt: Date
+        }
+        let legacy = LegacyWorkstream(
+            id: UUID(),
+            name: "legacy",
+            displayName: nil,
+            worktreePath: nil,
+            bypassPermissions: true,
+            lastAccessedAt: Date()
+        )
+        let data = try JSONEncoder().encode(legacy)
+        let decoded = try JSONDecoder().decode(Workstream.self, from: data)
+        XCTAssertEqual(decoded.harness, .claudeCode)
+        XCTAssertTrue(decoded.bypassPermissions)
+        XCTAssertEqual(decoded.name, "legacy")
+    }
+
+    func testProjectStorePreservesOpencodeHarness() {
+        let projects = [
+            Project(name: "one", directory: "/one", workstreams: [
+                Workstream(name: "dev", harness: .opencode),
+                Workstream(name: "main", harness: .claudeCode),
+            ]),
+        ]
+        ProjectStore.save(projects, defaults: testDefaults)
+        let loaded = ProjectStore.load(defaults: testDefaults)
+        XCTAssertEqual(loaded.first?.workstreams[0].harness, .opencode)
+        XCTAssertEqual(loaded.first?.workstreams[1].harness, .claudeCode)
+    }
 }

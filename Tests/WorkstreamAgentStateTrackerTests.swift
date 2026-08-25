@@ -281,4 +281,91 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         // Unknown tools have no canned phrase (falls back to the tool name in the UI).
         XCTAssertNil(HookEventReceiver.activityDescription(toolName: "SomeCustomTool", toolInput: nil))
     }
+
+    // MARK: - OpenCode (lowercase tool names, per-harness run names)
+
+    func testActivityDescriptionMatchesLowercaseOpencodeTools() {
+        let filePathInput: [String: Any] = ["file_path": "/repo/Sources/Foo.swift"]
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "edit", toolInput: filePathInput), String(format: NSLocalizedString("Editing %@", comment: ""), "Foo.swift"))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "read", toolInput: filePathInput), String(format: NSLocalizedString("Reading %@", comment: ""), "Foo.swift"))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "grep", toolInput: nil), NSLocalizedString("Searching", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "bash", toolInput: nil), NSLocalizedString("Running command", comment: ""))
+        XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "todowrite", toolInput: nil), NSLocalizedString("Planning", comment: ""))
+    }
+
+    func testOpencodeRunUsesProvidedHarnessName() {
+        var event = AgentEvent.waiting(agentId: "main")
+        event.name = "OpenCode"
+        handle(event)
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "OpenCode")
+    }
+
+    func testChildIdleRemovesOnlyThatChild() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "ses_child", name: "Explore", palette: 1))
+        handle(.idle(agentId: "ses_child"))
+        XCTAssertEqual(tracker.runs(for: wsID).map(\.id), ["main"])
+    }
+
+    func testMainIdleClearsRemainingChildren() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "ses_a", name: "Explore", palette: 1))
+        handle(.idle(agentId: "main"))
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
+    }
+
+    // MARK: - Name and attribute refinement
+
+    func testToolStartCreatesRunWithCarriedName() {
+        var event = AgentEvent.toolStart(agentId: "ses_child", tool: "edit")
+        event.name = "build"
+        handle(event)
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "build")
+    }
+
+    func testSubsequentEventRefinesExistingRunName() {
+        var first = AgentEvent.toolStart(agentId: "ses_child", tool: "bash")
+        first.name = "OpenCode"
+        handle(first)
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "OpenCode")
+
+        // The plugin reports the real agent type once known.
+        var second = AgentEvent.toolStart(agentId: "ses_child", tool: "read")
+        second.name = "general"
+        handle(second)
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "general")
+    }
+
+    func testAgentInfoStoresModelOnExistingRun() {
+        handle(.waiting(agentId: "main"))
+        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "claude-sonnet-4-5"))
+        let run = tracker.runs(for: wsID).first
+        XCTAssertEqual(run?.name, "OpenCode")
+        XCTAssertEqual(run?.model, "claude-sonnet-4-5")
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    func testAgentInfoDoesNotCreateGhostRuns() {
+        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "m"))
+        handle(AgentEvent.info(agentId: "ses_unknown", name: "build", model: "m"))
+        XCTAssertTrue(tracker.runs(for: wsID).isEmpty)
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+    }
+
+    func testAgentInfoDoesNotClearPermissionState() {
+        tracker.currentSelection = wsID
+        handle(.waiting(agentId: "main"))
+        handle(.status(agentId: "main", status: "permissionRequired"))
+        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "m"))
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
+    }
+
+    func testAgentInfoRefreshesLastEventAt() {
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: 30)
+        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "m"))
+        // If lastEventAt were not refreshed the next sweep would stall the run.
+        let cutoff = Date().addingTimeInterval(-WorkstreamAgentStateTracker.stallThreshold)
+        XCTAssertGreaterThan(tracker.runs(for: wsID)[0].lastEventAt, cutoff)
+    }
 }

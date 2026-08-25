@@ -14,6 +14,8 @@ struct AgentEvent: Codable, Sendable {
     var activity: String?
     var status: String?
     var parentAgentId: String?
+    /// Model identifier reported by the harness (e.g. "claude-sonnet-4-5").
+    var model: String?
 
     enum EventType: String, Codable, Sendable {
         case agentCreated
@@ -23,6 +25,7 @@ struct AgentEvent: Codable, Sendable {
         case agentToolDone
         case agentIdle
         case agentWaiting
+        case agentInfo
     }
 
     enum CodingKeys: String, CodingKey {
@@ -34,6 +37,7 @@ struct AgentEvent: Codable, Sendable {
         case activity
         case status
         case parentAgentId
+        case model
     }
 
     // -- Factory methods --
@@ -64,5 +68,13 @@ struct AgentEvent: Codable, Sendable {
 
     static func waiting(agentId: String) -> AgentEvent {
         AgentEvent(type: .agentWaiting, agentId: agentId)
+    }
+
+    /// Attribute refresh for an existing roster run (display name, model).
+    static func info(agentId: String, name: String?, model: String? = nil) -> AgentEvent {
+        var event = AgentEvent(type: .agentInfo, agentId: agentId)
+        event.name = name
+        event.model = model
+        return event
     }
 }

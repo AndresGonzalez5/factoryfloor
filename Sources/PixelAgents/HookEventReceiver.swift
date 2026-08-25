@@ -187,6 +187,8 @@ final class HookEventReceiver: @unchecked Sendable {
 
         // The ff-hook script wraps the Claude Code input as:
         //   { "event_input": { ... }, "project_dir": "..." }
+        // The Factory Floor opencode plugin posts the same envelope plus
+        //   "source": "opencode" with pre-digested event_input payloads.
         guard let projectDir = json["project_dir"] as? String else {
             logger.warning("Hook event missing project_dir")
             sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
@@ -199,10 +201,17 @@ final class HookEventReceiver: @unchecked Sendable {
             return
         }
 
-        let hookEventName = eventInput["hook_event_name"] as? String ?? ""
-        logger.info("Hook event received: \(hookEventName, privacy: .public) for project: \(projectDir, privacy: .public)")
-
-        let events = mapHookEvent(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
+        let source = json["source"] as? String
+        let events: [AgentEvent]
+        if source == "opencode" {
+            let kind = eventInput["kind"] as? String ?? ""
+            logger.info("OpenCode event received: \(kind, privacy: .public) for project: \(projectDir, privacy: .public)")
+            events = mapOpencodeEvent(eventInput: eventInput, projectDir: projectDir)
+        } else {
+            let hookEventName = eventInput["hook_event_name"] as? String ?? ""
+            logger.info("Hook event received: \(hookEventName, privacy: .public) for project: \(projectDir, privacy: .public)")
+            events = mapHookEvent(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
+        }
         if !events.isEmpty {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -228,30 +237,48 @@ final class HookEventReceiver: @unchecked Sendable {
         !agentId.isEmpty && agentId != "main"
     }
 
+    /// Assigns a roster palette slot for an agent within a project.
+    /// Must be called on `self.queue`.
+    private func assignPalette(projectDir: String, agentId: String) -> Int {
+        var state = projectState[projectDir] ?? ProjectState()
+        let palette: Int
+        if state.knownAgents.contains(agentId) {
+            palette = state.nextPalette % 6
+        } else {
+            palette = state.nextPalette % 6
+            state.nextPalette += 1
+            state.knownAgents.insert(agentId)
+        }
+        projectState[projectDir] = state
+        return palette
+    }
+
     /// Maps a tool name (and, when available, its input) to a short human-readable
     /// activity description for the sidebar roster, e.g. "Editing Foo.swift".
     static func activityDescription(toolName: String, toolInput: [String: Any]?) -> String? {
         let filePath = (toolInput?["file_path"] as? String) ?? (toolInput?["notebook_path"] as? String)
         let baseName = filePath.map { URL(fileURLWithPath: $0).lastPathComponent }
 
-        switch toolName {
-        case "Edit", "Write", "MultiEdit", "NotebookEdit":
+        // Claude Code tools are PascalCase ("Edit"); OpenCode tools are
+        // lowercase ("edit"). Match case-insensitively so both harnesses share one table.
+        switch toolName.lowercased() {
+        case "edit", "write", "multiedit", "notebookedit", "patch":
             if let baseName {
                 return String(format: NSLocalizedString("Editing %@", comment: "Agent is modifying a file"), baseName)
             }
             return NSLocalizedString("Editing", comment: "Agent is modifying a file")
-        case "Read":
+        case "read":
             if let baseName {
                 return String(format: NSLocalizedString("Reading %@", comment: "Agent is reading a file"), baseName)
             }
             return NSLocalizedString("Reading", comment: "Agent is reading a file")
-        case "Grep", "Glob":
+        case "grep", "glob":
             return NSLocalizedString("Searching", comment: "Agent is searching the codebase")
-        case "Bash":
+        case "bash":
             return NSLocalizedString("Running command", comment: "Agent is running a shell command")
-        case "WebFetch", "WebSearch":
+        case "webfetch", "websearch":
             return NSLocalizedString("Browsing", comment: "Agent is fetching web content")
-        case "TodoWrite":
+        case "todowrite", "todoread":
             return NSLocalizedString("Planning", comment: "Agent is updating its task plan")
         default:
             return nil
@@ -291,18 +318,7 @@ final class HookEventReceiver: @unchecked Sendable {
             guard isSubagent(aid) else { return [] }
             let agentType = eventInput["agent_type"] as? String ?? "Sub-agent"
             let name = String(agentType.prefix(20))
-
-            // Assign palette from per-project state
-            var state = projectState[projectDir] ?? ProjectState()
-            let palette: Int
-            if state.knownAgents.contains(aid) {
-                palette = state.nextPalette - 1 // already assigned, but we don't track — just use next
-            } else {
-                palette = state.nextPalette % 6
-                state.nextPalette += 1
-                state.knownAgents.insert(aid)
-                projectState[projectDir] = state
-            }
+            let palette = assignPalette(projectDir: projectDir, agentId: aid)
 
             logger.info("Hook SubagentStart: \(aid, privacy: .public) name=\(name, privacy: .public) palette=\(palette)")
             return [AgentEvent.created(agentId: aid, name: name, palette: palette, parentAgentId: "main")]
@@ -326,6 +342,72 @@ final class HookEventReceiver: @unchecked Sendable {
 
         default:
             logger.debug("Unhandled hook event: \(hookEventName, privacy: .public)")
+            return []
+        }
+    }
+
+    // MARK: - OpenCode Mapping
+
+    /// Maps a Factory Floor opencode plugin payload to zero or more `AgentEvent`s.
+    /// Payload shape: `{ kind, agent_id, name?, tool?, file_path?, session_id?, parent_session_id? }`.
+    /// Must be called on `self.queue`.
+    private func mapOpencodeEvent(eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
+        let kind = eventInput["kind"] as? String ?? ""
+        let aid = eventInput["agent_id"] as? String ?? "main"
+        let name = eventInput["name"] as? String
+
+        switch kind {
+        case "tool_start":
+            let toolName = eventInput["tool"] as? String ?? "unknown"
+            var toolInput: [String: Any]?
+            if let filePath = eventInput["file_path"] as? String {
+                toolInput = ["file_path": filePath]
+            }
+            let activity = Self.activityDescription(toolName: toolName, toolInput: toolInput)
+            var event = AgentEvent.toolStart(agentId: aid, tool: toolName, activity: activity)
+            event.name = name
+            return [event]
+
+        case "tool_done":
+            var event = AgentEvent.toolDone(agentId: aid)
+            event.name = name
+            return [event]
+
+        case "working":
+            // Heartbeat while streaming a response — keeps the run alive
+            // without changing its activity description.
+            var event = AgentEvent.toolStart(agentId: aid, tool: "respond")
+            event.name = name
+            return [event]
+
+        case "waiting":
+            var event = AgentEvent.waiting(agentId: aid)
+            event.name = name
+            return [event]
+
+        case "agent_info":
+            // Attribute refresh (display name, model) — no state change.
+            return [AgentEvent.info(agentId: aid, name: name, model: eventInput["model"] as? String)]
+
+        case "idle":
+            return [AgentEvent.idle(agentId: aid)]
+
+        case "permission_required":
+            return [AgentEvent.status(agentId: "main", status: "permissionRequired")]
+
+        case "session_created":
+            guard let sessionID = eventInput["session_id"] as? String, !sessionID.isEmpty,
+                  let parentID = eventInput["parent_session_id"] as? String, !parentID.isEmpty,
+                  isSubagent(sessionID)
+            else { return [] }
+            let agentType = (eventInput["agent_type"] as? String) ?? "Sub-agent"
+            let subName = String(agentType.prefix(20))
+            let palette = assignPalette(projectDir: projectDir, agentId: sessionID)
+            logger.info("OpenCode subagent: \(sessionID, privacy: .public) name=\(subName, privacy: .public) palette=\(palette)")
+            return [AgentEvent.created(agentId: sessionID, name: subName, palette: palette, parentAgentId: "main")]
+
+        default:
+            logger.debug("Unhandled opencode event: \(kind, privacy: .public)")
             return []
         }
     }

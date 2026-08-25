@@ -410,3 +410,20 @@
 "Stalled" = "Stalled";
 "Agent may be stalled" = "Agent may be stalled";
 "%lld agents active" = "%lld agents active";
+
+/* Multi-harness support */
+"Claude Code" = "Claude Code";
+"OpenCode" = "OpenCode";
+"Default coding agent" = "Default coding agent";
+"Used when creating new workstreams. Each workstream can override this choice." = "Used when creating new workstreams. Each workstream can override this choice.";
+"Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@." = "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@.";
+"%@ not found" = "%@ not found";
+"Install %@ to use the Coding Agent." = "Install %@ to use the Coding Agent.";
+"Install %@" = "Install %@";
+"%@ is not installed." = "%@ is not installed.";
+
+/* Quick action results */
+"Raw output" = "Raw output";
+"Open Pull Request" = "Open Pull Request";
+"Open Link" = "Open Link";
+"Working…" = "Working…";

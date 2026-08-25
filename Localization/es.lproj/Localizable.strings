@@ -410,3 +410,20 @@
 "Stalled" = "Estancado";
 "Agent may be stalled" = "El agente podría estar estancado";
 "%lld agents active" = "%lld agentes activos";
+
+/* Multi-harness support */
+"Claude Code" = "Claude Code";
+"OpenCode" = "OpenCode";
+"Default coding agent" = "Agente de codificación predeterminado";
+"Used when creating new workstreams. Each workstream can override this choice." = "Se usa al crear nuevos flujos de trabajo. Cada flujo de trabajo puede anular esta opción.";
+"Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@." = "Habilita la coordinación experimental multiagente. Los agentes pueden crear compañeros de equipo, delegar tareas y colaborar entre flujos de trabajo. Solo se aplica a %@.";
+"%@ not found" = "No se encontró %@";
+"Install %@ to use the Coding Agent." = "Instala %@ para usar el agente de codificación.";
+"Install %@" = "Instalar %@";
+"%@ is not installed." = "%@ no está instalado.";
+
+/* Quick action results */
+"Raw output" = "Salida en bruto";
+"Open Pull Request" = "Abrir pull request";
+"Open Link" = "Abrir enlace";
+"Working…" = "Trabajando…";

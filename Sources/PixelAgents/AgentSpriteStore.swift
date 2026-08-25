@@ -29,6 +29,16 @@ final class AgentSpriteStore {
     /// Number of distinct palettes (0 is the main agent).
     static let paletteCount = 6
 
+    /// Sprite-set aliases: agent type names without their own sprite files
+    /// reuse an existing set. OpenCode ships `build`/`plan`/`general`/`ask`
+    /// agents; Claude Code uses `explore`/`general-purpose`/`plan`.
+    private static let typeAliases: [String: String] = [
+        "build": "claude",
+        "code": "claude",
+        "general": "generalpurpose",
+        "ask": "explore",
+    ]
+
     /// Point size the avatars are normalized to.
     static let pointSize = CGSize(width: 16, height: 16)
 
@@ -43,7 +53,7 @@ final class AgentSpriteStore {
         let slot = ((palette % Self.paletteCount) + Self.paletteCount) % Self.paletteCount
 
         if let name, !name.isEmpty {
-            let key = Self.normalizeTypeName(name)
+            let key = Self.typeAliases[Self.normalizeTypeName(name)] ?? Self.normalizeTypeName(name)
             if !key.isEmpty {
                 if let file = spriteFile(for: key, variant: variant),
                    let image = cachedLookup("file:\(file)", resource: file)

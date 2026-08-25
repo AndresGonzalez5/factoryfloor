@@ -43,8 +43,9 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
         /// Claude's agent id ("main" or a subagent id).
         let id: String
-        /// Display name ("Claude" or the subagent type).
-        let name: String
+        /// Display name ("Claude"/"OpenCode" or the subagent type). Mutable:
+        /// later events may refine it once the harness reports the agent type.
+        var name: String
         let palette: Int
         let isMain: Bool
         /// Per-type occurrence slot: the lowest index not held by a live
@@ -54,6 +55,8 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         var state: RunState
         /// What the agent is doing right now, e.g. "Editing Foo.swift".
         var activity: String?
+        /// Model backing the run when the harness reports one.
+        var model: String?
         let startedAt: Date
         var lastEventAt: Date
     }
@@ -150,19 +153,25 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         let now = Date()
         var list = rosters[wsID] ?? []
 
-        func upsert(_ agentId: String, name: String = "Claude", palette: Int = 0, isMain: Bool = true, variantIndex: Int = 0, mutate: (inout AgentRun) -> Void = { _ in }) {
+        func upsert(_ agentId: String, name: String? = nil, palette: Int = 0, isMain: Bool = true, variantIndex: Int = 0, mutate: (inout AgentRun) -> Void = { _ in }) {
             if let idx = list.firstIndex(where: { $0.id == agentId }) {
                 mutate(&list[idx])
+                // Harnesses may report the display name after a run's first
+                // event (e.g. OpenCode child sessions); apply refinements.
+                if let name, !name.isEmpty, name != list[idx].name {
+                    list[idx].name = name
+                }
                 list[idx].lastEventAt = now
             } else {
                 var run = AgentRun(
                     id: agentId,
-                    name: name,
+                    name: name ?? "Claude",
                     palette: palette,
                     isMain: isMain,
                     variantIndex: variantIndex,
                     state: .working,
                     activity: nil,
+                    model: nil,
                     startedAt: now,
                     lastEventAt: now
                 )
@@ -181,7 +190,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             list.removeAll { $0.id == event.agentId }
 
         case .agentToolStart:
-            upsert(event.agentId) { run in
+            upsert(event.agentId, name: event.name) { run in
                 run.activity = event.activity ?? run.activity
                 if run.state == .stalled { run.state = .working }
             }
@@ -196,10 +205,29 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             }
 
         case .agentWaiting:
-            upsert(event.agentId)
+            upsert(event.agentId, name: event.name)
+
+        case .agentInfo:
+            // Attribute-only refresh: update an existing run's name/model
+            // without touching state or creating ghost runs.
+            if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
+                if let name = event.name, !name.isEmpty, name != list[idx].name {
+                    list[idx].name = name
+                }
+                if let model = event.model {
+                    list[idx].model = model
+                }
+                list[idx].lastEventAt = now
+            }
 
         case .agentIdle:
-            list.removeAll { $0.id == "main" }
+            // Main going idle ends the whole turn; a child idling removes only
+            // that child.
+            if event.agentId == "main" {
+                list.removeAll()
+            } else {
+                list.removeAll { $0.id == event.agentId }
+            }
 
         case .agentStatus:
             // Permission prompts don't change the roster; the sweep skips
@@ -241,7 +269,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                 states[wsID] = .working
             }
 
-        case .agentCreated, .agentRemoved:
+        case .agentCreated, .agentRemoved, .agentInfo:
             break
         }
     }

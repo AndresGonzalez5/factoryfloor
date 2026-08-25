@@ -54,6 +54,40 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertEqual(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1")
     }
 
+    // MARK: - Harness
+
+    func testAgentTeamsFlagNotSetForOpencode() {
+        let vars = WorkstreamEnvironment.variables(
+            workstreamID: baseParams.0,
+            projectName: baseParams.1,
+            workstreamName: baseParams.2,
+            projectDirectory: baseParams.3,
+            workingDirectory: baseParams.4,
+            port: baseParams.5,
+            agentTeams: true,
+            defaultBranch: "main",
+            scriptSource: nil,
+            harness: .opencode
+        )
+        XCTAssertNil(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"])
+        XCTAssertEqual(vars["FF_HARNESS"], "opencode")
+    }
+
+    func testHarnessVariableDefaultsToClaudeCode() {
+        let vars = WorkstreamEnvironment.variables(
+            workstreamID: baseParams.0,
+            projectName: baseParams.1,
+            workstreamName: baseParams.2,
+            projectDirectory: baseParams.3,
+            workingDirectory: baseParams.4,
+            port: baseParams.5,
+            agentTeams: false,
+            defaultBranch: "main",
+            scriptSource: nil
+        )
+        XCTAssertEqual(vars["FF_HARNESS"], "claudeCode")
+    }
+
     // MARK: - Conductor aliases
 
     func testConductorAliases() {

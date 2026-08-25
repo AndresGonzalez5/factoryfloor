@@ -188,6 +188,13 @@ struct FF2App: App {
             HookInstaller.install(hookScriptPath: hookURL.path)
         }
 
+        // Install the Factory Floor plugin so OpenCode forwards events
+        if let pluginURL = Bundle.main.url(forResource: "factoryfloor-opencode", withExtension: "js", subdirectory: "Scripts")
+            ?? Bundle.main.url(forResource: "factoryfloor-opencode", withExtension: "js")
+        {
+            OpencodePluginInstaller.install(bundledPath: pluginURL.path)
+        }
+
         let crashReportingEnabled = UserDefaults.standard.object(forKey: "factoryfloor.crashReportingEnabled") as? Bool ?? true
         if crashReportingEnabled {
             SentrySDK.start { options in

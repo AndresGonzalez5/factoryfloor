@@ -63,6 +63,17 @@ private struct RosterLine: View {
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
 
+            if let model = run.model {
+                Text(model)
+                    .font(.system(size: 8))
+                    .foregroundStyle(.quaternary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 70, alignment: .leading)
+                    .help(run.name + " · " + model)
+                    .accessibilityHidden(true)
+            }
+
             if let activity = run.activity {
                 Text(activity)
                     .font(.system(size: 9, design: .monospaced))

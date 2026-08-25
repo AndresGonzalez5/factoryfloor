@@ -238,7 +238,8 @@ func workspaceEnvironmentVariables(
     port: Int,
     agentTeams: Bool,
     defaultBranch: String,
-    scriptSource: String?
+    scriptSource: String?,
+    harness: CodingHarness = .claudeCode
 ) -> [String: String] {
     WorkstreamEnvironment.variables(
         workstreamID: workstreamID,
@@ -249,7 +250,8 @@ func workspaceEnvironmentVariables(
         port: port,
         agentTeams: agentTeams,
         defaultBranch: defaultBranch,
-        scriptSource: scriptSource
+        scriptSource: scriptSource,
+        harness: harness
     )
 }
 
@@ -294,6 +296,7 @@ struct TerminalContainerView: View {
     let workstreamName: String
     let workstreamLabel: String
     let bypassPermissions: Bool
+    var harness: CodingHarness = .claudeCode
     let isActive: Bool
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
@@ -324,7 +327,11 @@ struct TerminalContainerView: View {
     @State private var refreshGeneration = 0
     @State private var refreshDebounceTask: Task<Void, Never>?
     @State private var fileFinderRequest = 0
-    @State private var cachedClaudeCommand: String?
+    @State private var cachedAgentCommand: String?
+    /// Harness the cached command was built for. Guards against rendering a
+    /// stale command right after a harness switch, which would recreate the
+    /// agent surface under the previous CLI before the rebuild lands.
+    @State private var cachedCommandHarness: CodingHarness?
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
     @State private var browserStartPending = false
@@ -346,6 +353,7 @@ struct TerminalContainerView: View {
         workstreamName: String,
         workstreamLabel: String? = nil,
         bypassPermissions: Bool,
+        harness: CodingHarness = .claudeCode,
         isActive: Bool,
         scriptConfig: ScriptConfig = .empty,
         initialTabState: WorkspaceTabSnapshot = startupWorkspaceTabState(snapshot: nil, savedTab: nil)
@@ -357,6 +365,7 @@ struct TerminalContainerView: View {
         self.workstreamName = workstreamName
         self.workstreamLabel = workstreamLabel ?? workstreamName
         self.bypassPermissions = bypassPermissions
+        self.harness = harness
         self.isActive = isActive
         _activeTab = State(initialValue: initialTabState.activeTab)
         _tabs = State(initialValue: initialTabState.tabs)
@@ -488,6 +497,40 @@ struct TerminalContainerView: View {
         return appEnv.githubPR(for: projectDirectory, branch: branch)
     }
 
+    /// The Factory Floor state directory inside the worktree.
+    private var factoryFloorStateDirectory: URL {
+        URL(fileURLWithPath: workingDirectory).appendingPathComponent(".factoryfloor-state", isDirectory: true)
+    }
+
+    /// Session id recorded by the Factory Floor opencode plugin, if any.
+    private var trackedOpencodeSessionID: String? {
+        let url = factoryFloorStateDirectory.appendingPathComponent("opencode-session")
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Writes (or clears) the system-prompt instructions the opencode plugin
+    /// appends on each user message. Claude receives these via
+    /// --append-system-prompt instead.
+    private func syncOpencodeInstructions() {
+        var parts: [String] = []
+        if !allowOutsideWorktree {
+            parts.append(SystemPrompts.restrictToWorktreePrompt(worktreePath: workingDirectory))
+        }
+        if autoRenameBranch {
+            parts.append(SystemPrompts.autoRenameBranchPrompt)
+        }
+
+        let instructionsURL = factoryFloorStateDirectory.appendingPathComponent("instructions.md")
+        do {
+            try FileManager.default.createDirectory(at: factoryFloorStateDirectory, withIntermediateDirectories: true)
+            try parts.joined(separator: "\n\n").write(to: instructionsURL, atomically: true, encoding: .utf8)
+        } catch {
+            logger.warning("Failed to write opencode instructions: \(error.localizedDescription)")
+        }
+    }
+
     private func buildClaudeCommand() -> String? {
         guard let basePath = appEnv.toolStatus.claude.path else { return nil }
         let sessionID = workstreamID.uuidString.lowercased()
@@ -528,8 +571,38 @@ struct TerminalContainerView: View {
             message: "Starting new session..."
         )
 
+        return wrapAgentCommand(cmd, intermediates: [resume.command, fresh.command, cmd], toolPathsClaude: basePath, toolPathsOpencode: nil)
+    }
+
+    private func buildOpencodeCommand() -> String? {
+        guard let basePath = appEnv.toolStatus.opencode.path else { return nil }
+        syncOpencodeInstructions()
+
+        // Resume-first: prefer the session id the plugin recorded for this
+        // worktree; fall back to launching fresh (the plugin then records the
+        // new id).
+        var resume = CommandBuilder(basePath)
+        if let tracked = trackedOpencodeSessionID {
+            resume.flag("--session")
+            resume.arg(tracked)
+        }
+        if bypassPermissions { resume.flag("--auto") }
+
+        var fresh = CommandBuilder(basePath)
+        if bypassPermissions { fresh.flag("--auto") }
+
+        let cmd = CommandBuilder.withFallback(
+            resume.command, fresh.command,
+            message: "Starting new session..."
+        )
+
+        return wrapAgentCommand(cmd, intermediates: [resume.command, fresh.command, cmd], toolPathsClaude: nil, toolPathsOpencode: basePath)
+    }
+
+    /// Shared tail of agent command building: optional tmux wrapping + launch log.
+    private func wrapAgentCommand(_ cmd: String, intermediates: [String], toolPathsClaude: String?, toolPathsOpencode: String?) -> String {
         let finalCommand: String
-        var intermediates = [resume.command, fresh.command, cmd]
+        var intermediates = intermediates
         if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
             let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "agent")
             finalCommand = TmuxSession.wrapCommand(tmuxPath: tmuxPath, sessionName: session, command: cmd, environmentVars: envVars, respawnOnExit: true)
@@ -546,7 +619,8 @@ struct TerminalContainerView: View {
             environmentVariables: envVars,
             workingDirectory: workingDirectory,
             toolPaths: LaunchLogEntry.ToolPaths(
-                claude: appEnv.toolStatus.claude.path,
+                claude: toolPathsClaude ?? appEnv.toolStatus.claude.path,
+                opencode: toolPathsOpencode,
                 tmux: appEnv.toolStatus.tmux.path,
                 ffRun: RunLauncher.executableURL()?.path
             ),
@@ -563,8 +637,27 @@ struct TerminalContainerView: View {
         return finalCommand
     }
 
-    private func rebuildClaudeCommand() {
-        cachedClaudeCommand = buildClaudeCommand()
+    private func buildAgentCommand() -> String? {
+        switch harness {
+        case .claudeCode: return buildClaudeCommand()
+        case .opencode: return buildOpencodeCommand()
+        }
+    }
+
+    /// The binary path backing this workstream's harness, when installed.
+    private var harnessBinaryPath: String? {
+        switch harness {
+        case .claudeCode: return appEnv.toolStatus.claude.path
+        case .opencode: return appEnv.toolStatus.opencode.path
+        }
+    }
+
+    private func rebuildAgentCommand() {
+        cachedAgentCommand = buildAgentCommand()
+        cachedCommandHarness = harness
+        if let cmd = cachedAgentCommand {
+            logger.info("[FF] agent cmd rebuilt for \(self.harness.rawValue, privacy: .public): \(cmd.prefix(80), privacy: .public)")
+        }
     }
 
     private var fixedTabs: [WorkspaceTab] {
@@ -707,25 +800,25 @@ struct TerminalContainerView: View {
                 setupGateFailedView
             } else if sessionMode == .waitingForTools || appEnv.isDetecting {
                 terminalLoadingView(message: "Checking terminal tools...")
-            } else if appEnv.toolStatus.claude.path == nil {
+            } else if harnessBinaryPath == nil {
                 VStack(spacing: 16) {
-                    Image(systemName: "sparkle")
+                    Image(systemName: harness.systemImageName)
                         .font(.system(size: 40))
                         .foregroundStyle(.tertiary)
-                    Text("Claude Code not found")
+                    Text("\(harness.displayName) not found")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                    Text("Install Claude Code to use the Coding Agent.")
+                    Text("Install \(harness.displayName) to use the Coding Agent.")
                         .foregroundStyle(.tertiary)
-                    Link("Install Claude Code", destination: URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")!)
+                    Link("Install \(harness.displayName)", destination: harness.installURL)
                         .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let claudeCommand = cachedClaudeCommand {
+            } else if let agentCommand = cachedAgentCommand, cachedCommandHarness == harness {
                 SingleTerminalView(
                     surfaceID: claudeID,
                     workingDirectory: workingDirectory,
-                    command: claudeCommand,
+                    command: agentCommand,
                     isFocused: true,
                     environmentVars: envVars
                 )
@@ -778,13 +871,24 @@ struct TerminalContainerView: View {
 
     private var mainContent: some View {
         mainLayout
-            .onChange(of: tmuxMode) { rebuildClaudeCommand() }
-            .onChange(of: bypassPermissions) { rebuildClaudeCommand() }
-            .onChange(of: autoRenameBranch) { rebuildClaudeCommand() }
-            .onChange(of: allowOutsideWorktree) { rebuildClaudeCommand() }
-            .onChange(of: workstreamName) { rebuildClaudeCommand() }
+            .onChange(of: tmuxMode) { rebuildAgentCommand() }
+            .onChange(of: bypassPermissions) { rebuildAgentCommand() }
+            .onChange(of: autoRenameBranch) { rebuildAgentCommand() }
+            .onChange(of: allowOutsideWorktree) { rebuildAgentCommand() }
+            .onChange(of: workstreamName) { rebuildAgentCommand() }
+            .onChange(of: harness) {
+                // The sidebar switch already tore the old agent surface down.
+                // Rebuild for the new harness and start it immediately —
+                // otherwise the next render would lazily recreate the surface.
+                rebuildAgentCommand()
+                guard setupGateState != .awaitingApproval else { return }
+                if setupGateState == .notNeeded {
+                    surfaceCache.respawnableIDs.insert(claudeID)
+                }
+                preloadSurfaces()
+            }
             .onChange(of: appEnv.isDetecting) {
-                rebuildClaudeCommand()
+                rebuildAgentCommand()
                 if isActive { preloadSurfaces() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleInfo)) { _ in
@@ -986,7 +1090,8 @@ struct TerminalContainerView: View {
 
                         GitHubActionMenu(
                             runner: quickActionRunner,
-                            claudePath: appEnv.toolStatus.claude.path,
+                            harness: harness,
+                            agentPath: harnessBinaryPath,
                             ghPath: appEnv.toolStatus.gh.path,
                             workingDirectory: workingDirectory,
                             branchName: appEnv.branchName(for: workingDirectory),
@@ -1466,7 +1571,7 @@ struct TerminalContainerView: View {
             }
         }
         appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
-        cachedClaudeCommand = buildClaudeCommand()
+        rebuildAgentCommand()
         scriptsApproved = ScriptTrust.isApproved(scriptConfig, for: projectDirectory)
         setupGateState = SetupGateState.resolve(
             hasSetupScript: scriptConfig.setup != nil,
@@ -1506,8 +1611,8 @@ struct TerminalContainerView: View {
             }
         } else {
             // Agent surface
-            if let cmd = cachedClaudeCommand {
-                _ = surfaceCache.surface(
+            if let cmd = cachedAgentCommand {
+                _ = surfaceCache.ensureSurface(
                     for: claudeID,
                     app: app,
                     workingDirectory: workingDirectory,
@@ -1541,7 +1646,8 @@ struct TerminalContainerView: View {
             port: workstreamPort,
             agentTeams: agentTeams,
             defaultBranch: defaultBranch,
-            scriptSource: scriptConfig.source
+            scriptSource: scriptConfig.source,
+            harness: harness
         )
     }
 
@@ -1750,7 +1856,8 @@ private struct WorkspaceTabDropDelegate: DropDelegate {
 
 private struct GitHubActionMenu: View {
     @ObservedObject var runner: QuickActionRunner
-    let claudePath: String?
+    let harness: CodingHarness
+    let agentPath: String?
     let ghPath: String?
     let workingDirectory: String
     let branchName: String?
@@ -1841,8 +1948,8 @@ private struct GitHubActionMenu: View {
 
     private func disabledReason(for action: QuickAction) -> String? {
         if action.usesLLM {
-            if claudePath == nil {
-                return NSLocalizedString("Claude Code is not installed.", comment: "")
+            if agentPath == nil {
+                return String(format: NSLocalizedString("%@ is not installed.", comment: "Quick actions unavailable because the coding agent CLI is missing"), harness.displayName)
             }
             if !bypassPermissions {
                 return NSLocalizedString("Enable \"Bypass permission prompts\" in Settings.", comment: "")
@@ -1858,7 +1965,8 @@ private struct GitHubActionMenu: View {
         guard disabledReason(for: action) == nil else { return }
         runner.run(
             action: action,
-            claudePath: claudePath,
+            harness: harness,
+            agentPath: agentPath,
             ghPath: ghPath,
             workingDirectory: workingDirectory,
             branchName: branchName
@@ -2213,12 +2321,6 @@ private struct TerminalSurfaceView: NSViewRepresentable {
 private struct QuickActionDebugView: View {
     @ObservedObject var runner: QuickActionRunner
 
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f
-    }()
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -2245,35 +2347,7 @@ private struct QuickActionDebugView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(runner.log) { entry in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Text(Self.timeFormatter.string(from: entry.timestamp))
-                                        .foregroundStyle(.tertiary)
-                                    Text(entry.action.label)
-                                        .foregroundStyle(.primary)
-                                    if let code = entry.exitCode {
-                                        Text("exit \(code)")
-                                            .foregroundStyle(code == 0 ? .green : .red)
-                                    } else {
-                                        ProgressView()
-                                            .controlSize(.mini)
-                                    }
-                                }
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-
-                                Text("$ " + entry.command)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-
-                                if !entry.output.isEmpty {
-                                    Text(entry.output)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.primary)
-                                        .textSelection(.enabled)
-                                }
-                            }
-                            .padding(.horizontal, 8)
+                            QuickActionLogRow(entry: entry)
                         }
                     }
                     .padding(.vertical, 4)
@@ -2282,6 +2356,97 @@ private struct QuickActionDebugView: View {
         }
         .frame(height: 200)
         .background(.background)
+    }
+}
+
+private struct QuickActionLogRow: View {
+    let entry: QuickActionLogEntry
+    @State private var showsRawOutput = false
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(Self.timeFormatter.string(from: entry.timestamp))
+                    .foregroundStyle(.tertiary)
+                Text(entry.action.label)
+                    .foregroundStyle(.primary)
+                if let code = entry.exitCode {
+                    Text("exit \(code)")
+                        .foregroundStyle(code == 0 ? .green : .red)
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+            }
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+
+            Text("$ " + entry.command)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            summarySection
+
+            if !entry.output.isEmpty {
+                DisclosureGroup(isExpanded: $showsRawOutput) {
+                    Text(entry.output)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } label: {
+                    Text("Raw output")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+
+    /// Parsed assistant-text result, or a placeholder while streaming.
+    @ViewBuilder
+    private var summarySection: some View {
+        if let summary = entry.summary, !summary.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let artifactURL = entry.artifactURL, let url = URL(string: artifactURL) {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Label(artifactLabel, systemImage: "arrow.up.forward")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .help(url.absoluteString)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 5))
+        } else if entry.exitCode == nil {
+            Text("Working…")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var artifactLabel: String {
+        if entry.artifactURL?.contains("/pull/") == true {
+            return NSLocalizedString("Open Pull Request", comment: "Opens the PR created by a quick action")
+        }
+        return NSLocalizedString("Open Link", comment: "Opens an artifact link produced by a quick action")
     }
 }
 
@@ -2356,6 +2521,33 @@ final class TerminalSurfaceCache: ObservableObject {
             creationTimes[id] = Date()
         }
         return view
+    }
+
+    /// Creates the surface for `id`, replacing any existing surface whose
+    /// stored command differs (e.g., after a harness switch). A matching
+    /// surface is returned untouched.
+    func ensureSurface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String?, initialInput: String? = nil, environmentVars: [String: String] = [:], waitAfterCommand: Bool = true) -> TerminalView {
+        if let existing = surfaces[id],
+           let params = surfaceParams[id],
+           params.command == command,
+           params.workingDirectory == workingDirectory
+        {
+            return existing
+        }
+        if let stale = surfaces[id] {
+            logger.info("Replacing surface \(id) — command changed")
+            respawnableIDs.remove(id)
+            removeSurface(for: id)
+        }
+        return surface(
+            for: id,
+            app: app,
+            workingDirectory: workingDirectory,
+            command: command,
+            initialInput: initialInput,
+            environmentVars: environmentVars,
+            waitAfterCommand: waitAfterCommand
+        )
     }
 
     /// Retry creating a surface that previously failed.

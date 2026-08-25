@@ -1,4 +1,4 @@
-// ABOUTME: Spawns one-shot claude -p subprocesses or git/gh commands for quick actions.
+// ABOUTME: Spawns one-shot coding-agent subprocesses or git/gh commands for quick actions.
 // ABOUTME: Forks from the active session for context-aware tasks like PR creation.
 
 import Foundation
@@ -75,6 +75,50 @@ struct QuickActionLogEntry: Identifiable {
     let command: String
     var output: String
     var exitCode: Int32?
+    /// Human-readable result extracted from the harness output (assistant
+    /// text), shown instead of the raw stream.
+    var summary: String?
+    /// Link extracted from the result (e.g. the created PR URL).
+    var artifactURL: String?
+}
+
+/// Thread-safe accumulator for streamed command output.
+private final class OutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    var text: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Thread-safe rate limiter for streaming UI updates.
+private final class StreamThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date.distantPast
+    private let minInterval: TimeInterval
+
+    init(minInterval: TimeInterval) {
+        self.minInterval = minInterval
+    }
+
+    /// Returns true at most once per `minInterval`.
+    func shouldEmit() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = Date()
+        guard now.timeIntervalSince(last) >= minInterval else { return false }
+        last = now
+        return true
+    }
 }
 
 @MainActor
@@ -84,10 +128,14 @@ final class QuickActionRunner: ObservableObject {
     var onSuccess: ((QuickAction) -> Void)?
     private var runningProcess: Process?
     private var dismissWork: DispatchWorkItem?
+    /// Worktree sentinel file written while an OpenCode quick action runs so
+    /// the plugin ignores that subprocess (prevents session hijacking).
+    private var sentinelPath: String?
 
     func run(
         action: QuickAction,
-        claudePath: String?,
+        harness: CodingHarness = .claudeCode,
+        agentPath: String?,
         ghPath: String?,
         workingDirectory: String,
         branchName: String? = nil
@@ -99,8 +147,13 @@ final class QuickActionRunner: ObservableObject {
 
         switch action {
         case .commit, .createPR:
-            guard let claudePath else { return }
-            runClaudeAction(action: action, claudePath: claudePath, workingDirectory: workingDirectory)
+            guard let agentPath else { return }
+            switch harness {
+            case .claudeCode:
+                runClaudeAction(action: action, claudePath: agentPath, workingDirectory: workingDirectory)
+            case .opencode:
+                runOpencodeAction(action: action, opencodePath: agentPath, workingDirectory: workingDirectory)
+            }
         case .push:
             runPush(workingDirectory: workingDirectory)
         case .closePR:
@@ -126,6 +179,150 @@ final class QuickActionRunner: ObservableObject {
         let innerCommand = args.joined(separator: " ")
         let shell = CommandBuilder.userShell
         runShellCommand(action: action, shell: shell, arguments: ["-lic", innerCommand], workingDirectory: workingDirectory, parseJSON: true)
+    }
+
+    private func runOpencodeAction(action: QuickAction, opencodePath: String, workingDirectory: String) {
+        guard let prompt = action.prompt else { return }
+
+        // Continue the workstream's tracked session in forked form so quick
+        // actions never pollute the interactive conversation. Prefer the
+        // explicit session id the plugin recorded (deterministic) over
+        // --continue, which silently follows the directory's newest session.
+        var args: [String] = []
+        args.append(opencodePath)
+        args.append("run")
+        if let sessionID = Self.trackedSessionID(in: workingDirectory) {
+            args.append("--session")
+            args.append(CommandBuilder.shellQuote(sessionID))
+            args.append("--fork")
+        } else {
+            args.append("--continue")
+            args.append("--fork")
+        }
+        args.append("--auto")
+        args.append("--format")
+        args.append("json")
+        args.append(CommandBuilder.shellQuote(prompt))
+
+        let innerCommand = args.joined(separator: " ")
+        let shell = CommandBuilder.userShell
+        Self.writeSentinel(workingDirectory: workingDirectory)
+        sentinelPath = Self.sentinelPath(workingDirectory: workingDirectory)
+        runShellCommand(
+            action: action, shell: shell, arguments: ["-lic", innerCommand],
+            workingDirectory: workingDirectory, parseJSON: false,
+            liveUpdate: { [weak self] outputText in
+                DispatchQueue.main.async {
+                    self?.updateOpencodeLiveSummary(entryText: outputText)
+                }
+            }
+        )
+    }
+
+    /// The plugin-recorded session id for the worktree, if any.
+    private nonisolated static func trackedSessionID(in directory: String) -> String? {
+        let url = URL(fileURLWithPath: directory)
+            .appendingPathComponent(".factoryfloor-state/opencode-session")
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - OpenCode quick-action sentinel
+
+    private nonisolated static func sentinelPath(workingDirectory dir: String) -> String {
+        URL(fileURLWithPath: dir)
+            .appendingPathComponent(".factoryfloor-state/opencode-quickaction").path
+    }
+
+    private nonisolated static func writeSentinel(workingDirectory dir: String) {
+        let path = sentinelPath(workingDirectory: dir)
+        let stateDir = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
+        let ms = Int64(Date().timeIntervalSince1970 * 1000)
+        try? "\(ms)".write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    private func removeSentinel() {
+        guard let path = sentinelPath else { return }
+        try? FileManager.default.removeItem(atPath: path)
+        sentinelPath = nil
+    }
+
+    // MARK: - OpenCode stream parsing
+
+    /// Live summary refresh while the JSONL event stream is arriving.
+    private func updateOpencodeLiveSummary(entryText rawOutput: String) {
+        guard case .running = state else { return }
+        let parsed = Self.parseOpencodeStream(rawOutput)
+        guard let idx = log.indices.last else { return }
+        log[idx].summary = parsed.summary ?? log[idx].summary
+    }
+
+    /// Parses an `opencode run --format json` JSONL stream into a
+    /// human-readable result: the final assistant text plus any GitHub PR URL.
+    ///
+    /// Each line is `{ type, timestamp, sessionID, ... }`. Assistant text
+    /// arrives via `message.updated` (`info.role == "assistant"`, `info.id`)
+    /// and `message.part.updated` (`part.type == "text"`). Unknown shapes are
+    /// tolerated so newer/older CLI versions degrade gracefully.
+    nonisolated static func parseOpencodeStream(_ text: String) -> (summary: String?, pullRequestURL: String?) {
+        var assistantMessages = Set<String>()
+        var partsByID: [String: String] = [:]
+        var partOrder: [String] = []
+
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let data = String(line).data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            let props = json["properties"] as? [String: Any]
+
+            if json["type"] as? String == "message.updated" {
+                let info = (json["info"] as? [String: Any]) ?? (props?["info"] as? [String: Any])
+                if let info,
+                   (info["role"] as? String) == "assistant",
+                   let messageID = info["id"] as? String
+                {
+                    assistantMessages.insert(messageID)
+                }
+            }
+
+            for container in [json, props].compactMap({ $0 }) {
+                guard let part = container["part"] as? [String: Any],
+                      (part["type"] as? String) == "text",
+                      let body = part["text"] as? String,
+                      !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { continue }
+                // When we know which messages are assistant messages, only
+                // accept parts belonging to them; otherwise accept all.
+                if let messageID = part["messageID"] as? String, !assistantMessages.isEmpty,
+                   !assistantMessages.contains(messageID)
+                {
+                    continue
+                }
+                let id = (part["id"] as? String) ?? "part-\(partOrder.count)"
+                if partsByID[id] == nil {
+                    partOrder.append(id)
+                }
+                partsByID[id] = body
+            }
+        }
+
+        // The last assistant text block is the actionable answer ("Committed
+        // abc1234…", "Created #14 …"); earlier blocks are narration.
+        let summary = partOrder.last.flatMap { partsByID[$0] }
+        let scanned = [summary, text].compactMap { $0 }.joined(separator: "\n")
+        return (summary, Self.firstPullRequestURL(in: scanned))
+    }
+
+    private nonisolated static func firstPullRequestURL(in text: String) -> String? {
+        let pattern = #"https://github\.com/[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+/(?:pull|issues)/\d+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let urlRange = Range(match.range, in: text)
+        else { return nil }
+        return String(text[urlRange])
     }
 
     private func runPush(workingDirectory: String) {
@@ -191,7 +388,14 @@ final class QuickActionRunner: ObservableObject {
         }
     }
 
-    private func runShellCommand(action: QuickAction, shell: String, arguments: [String], workingDirectory: String, parseJSON: Bool) {
+    private func runShellCommand(
+        action: QuickAction,
+        shell: String,
+        arguments: [String],
+        workingDirectory: String,
+        parseJSON: Bool,
+        liveUpdate: (@Sendable (String) -> Void)? = nil
+    ) {
         let fullCommand = "\(shell) \(arguments.joined(separator: " "))"
         let entryID = appendLog(action: action, command: fullCommand)
         let actionRaw = action.rawValue
@@ -209,20 +413,42 @@ final class QuickActionRunner: ObservableObject {
             process.standardOutput = pipe
             process.standardError = pipe
 
+            // Streams output as it arrives so summaries update live.
+            let buffer = OutputBuffer()
+            let throttle = StreamThrottle(minInterval: 0.3)
+            if let liveUpdate {
+                pipe.fileHandleForReading.readabilityHandler = { handle in
+                    let chunk = handle.availableData
+                    guard !chunk.isEmpty else { return }
+                    buffer.append(chunk)
+                    // Throttle UI refreshes; publishing every chunk would
+                    // churn the log view.
+                    guard throttle.shouldEmit() else { return }
+                    liveUpdate(buffer.text)
+                }
+            }
+
             let success: Bool
             let output: String
             do {
                 try process.run()
                 await MainActor.run { self.runningProcess = process }
                 process.waitUntilExit()
+                if let liveUpdate {
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                }
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                output = String(data: data, encoding: .utf8) ?? ""
+                buffer.append(data)
+                output = buffer.text
                 if parseJSON {
                     success = Self.parseSuccess(output: output, exitCode: process.terminationStatus)
                 } else {
                     success = process.terminationStatus == 0
                 }
             } catch {
+                if let liveUpdate {
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                }
                 output = "Failed to launch: \(error.localizedDescription)"
                 success = false
             }
@@ -232,7 +458,13 @@ final class QuickActionRunner: ObservableObject {
                 if let idx = self.log.firstIndex(where: { $0.id == entryID }) {
                     self.log[idx].output = output
                     self.log[idx].exitCode = exitCode
+                    if !parseJSON, exitCode == 0 || !output.isEmpty {
+                        let parsed = Self.parseOpencodeStream(output)
+                        self.log[idx].summary = parsed.summary
+                        self.log[idx].artifactURL = parsed.pullRequestURL
+                    }
                 }
+                self.removeSentinel()
                 self.runningProcess = nil
                 self.state = success ? .succeeded(action) : .failed(action)
                 if success {
@@ -264,6 +496,7 @@ final class QuickActionRunner: ObservableObject {
     func cancel() {
         runningProcess?.terminate()
         runningProcess = nil
+        removeSentinel()
         state = .idle
     }
 
