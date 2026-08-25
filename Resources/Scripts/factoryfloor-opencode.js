@@ -9,6 +9,14 @@ const PORT_FILE = `${process.env.HOME}/Library/Caches/factoryfloor/hook-port`
 const STATE_DIR = ".factoryfloor-state"
 const SESSION_FILE = `${STATE_DIR}/opencode-session`
 const INSTRUCTIONS_FILE = `${STATE_DIR}/instructions.md`
+// Written by the app while a quick-action subprocess runs; while present we
+// must not adopt forked session ids (they would hijack the interactive
+// session's resume pointer) or forward roster/status events for them.
+const QUICKACTION_SENTINEL = `${STATE_DIR}/opencode-quickaction`
+// Sentinel files older than this are stale (app crashed mid-run) and ignored.
+const SENTINEL_MAX_AGE_MS = 30 * 60 * 1000
+// How often to re-read the sentinel file from disk.
+const SENTINEL_POLL_MS = 2000
 
 let cachedPort = null
 
@@ -30,9 +38,32 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
     if (saved) currentSession = saved
   } catch {}
 
+  // childSessionID -> display name ("build", "plan", "general", custom agents)
+  const children = new Map()
+  // Dedup guard for assistant info events: agent_id -> "name|model"
+  const lastInfo = new Map()
+
+  let sentinelCache = { value: false, at: 0 }
+
+  function quickActionActive() {
+    const now = Date.now()
+    if (now - sentinelCache.at < SENTINEL_POLL_MS) return sentinelCache.value
+    let active = false
+    try {
+      const raw = readFileSync(`${root}/${QUICKACTION_SENTINEL}`, "utf8").trim()
+      const ts = Number(raw)
+      active = raw.length === 0 || (!Number.isNaN(ts) && now - ts < SENTINEL_MAX_AGE_MS)
+    } catch {}
+    sentinelCache = { value: active, at: now }
+    return active
+  }
+
   function adoptSession(id) {
     if (!id || typeof id !== "string") return
     if (currentSession === id) return
+    // Quick actions run in the same worktree; never repoint the resume
+    // pointer at their forked sessions.
+    if (quickActionActive()) return
     currentSession = id
     try {
       mkdirSync(`${root}/${STATE_DIR}`, { recursive: true })
@@ -48,7 +79,18 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
     return isChild(sessionID) ? sessionID : "main"
   }
 
+  function displayNameFor(sessionID) {
+    if (isChild(sessionID)) {
+      const known = children.get(sessionID)
+      if (known) return known
+      if (sessionID) children.set(sessionID, "Sub-agent")
+      return "Sub-agent"
+    }
+    return "OpenCode"
+  }
+
   async function send(payload) {
+    if (quickActionActive()) return
     const port = readPort()
     if (!port) return
     try {
@@ -92,6 +134,13 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
     return { tool, filePath }
   }
 
+  /// Registers a child session so later events carry its real agent name.
+  function registerChild(sessionID, agentName) {
+    if (!sessionID || !agentName) return false
+    children.set(sessionID, agentName)
+    return true
+  }
+
   return {
     event: async ({ event }) => {
       const type = event?.type
@@ -106,7 +155,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             tool,
             file_path: filePath || undefined,
             agent_id: agentIdFor(sessionID),
-            name: "OpenCode",
+            name: displayNameFor(sessionID),
           })
           break
         }
@@ -116,17 +165,61 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             kind: "tool_done",
             tool: properties.tool || "unknown",
             agent_id: agentIdFor(sessionID),
-            name: "OpenCode",
+            name: displayNameFor(sessionID),
           })
           break
         }
-        case "message.updated":
+        case "message.updated": {
+          const info = properties.info || {}
+          if (info.role === "assistant") {
+            const sessionID = extractSessionID(properties)
+            const aid = agentIdFor(sessionID)
+            const name = displayNameFor(sessionID)
+            const model = info.modelID || ""
+            const fingerprint = `${name}|${model}`
+            if (lastInfo.get(aid) !== fingerprint) {
+              lastInfo.set(aid, fingerprint)
+              await send({
+                kind: "agent_info",
+                agent_id: aid,
+                name,
+                model: model || undefined,
+              })
+            }
+          }
+          break
+        }
         case "message.part.updated": {
-          const role =
-            properties.info?.role || properties.part?.role || properties.message?.role || null
+          const part = properties.part || {}
+          if (part.type === "subtask") {
+            // Delegation signal: register the child before its first tool call
+            // so the roster shows the real agent name immediately.
+            const childID = part.sessionID || null
+            const agentName = part.agent || "Sub-agent"
+            if (
+              childID &&
+              currentSession &&
+              childID !== currentSession &&
+              !children.has(childID)
+            ) {
+              registerChild(childID, agentName)
+              await send({
+                kind: "session_created",
+                session_id: childID,
+                parent_session_id: currentSession,
+                agent_type: agentName,
+              })
+            }
+            break
+          }
+          const role = properties.info?.role || part.role || properties.message?.role || null
           if (role && role !== "assistant") break
           const sessionID = extractSessionID(properties)
-          await send({ kind: "working", agent_id: agentIdFor(sessionID), name: "OpenCode" })
+          await send({
+            kind: "working",
+            agent_id: agentIdFor(sessionID),
+            name: displayNameFor(sessionID),
+          })
           break
         }
         case "permission.asked": {
@@ -135,7 +228,25 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
         }
         case "permission.replied": {
           const sessionID = extractSessionID(properties)
-          await send({ kind: "working", agent_id: agentIdFor(sessionID), name: "OpenCode" })
+          await send({
+            kind: "working",
+            agent_id: agentIdFor(sessionID),
+            name: displayNameFor(sessionID),
+          })
+          break
+        }
+        case "session.status": {
+          const sessionID = extractSessionID(properties)
+          const status = properties.status?.type || properties.status
+          if (status === "busy" || status === "retry") {
+            await send({
+              kind: "working",
+              agent_id: agentIdFor(sessionID),
+              name: displayNameFor(sessionID),
+            })
+          } else if (status === "idle") {
+            await send({ kind: "idle", agent_id: agentIdFor(sessionID) })
+          }
           break
         }
         case "session.idle": {
@@ -147,9 +258,11 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
           const info = properties.info || {}
           const id = info.id || properties.sessionID
           if (info.parentID) {
+            const isChildSession = info.parentID && id !== info.parentID
+            if (isChildSession) registerChild(id, info.agent || "Sub-agent")
             await send({
               kind: "session_created",
-              session_id: info.parentID && id !== info.parentID ? id : null,
+              session_id: isChildSession ? id : null,
               parent_session_id: info.parentID,
               agent_type: info.agent || "Sub-agent",
             })
@@ -167,7 +280,9 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
       const inputSession = input?.sessionID || output?.message?.sessionID
       if (!currentSession && inputSession) adoptSession(inputSession)
 
-      await send({ kind: "waiting", agent_id: "main", name: "OpenCode" })
+      if (!quickActionActive()) {
+        await send({ kind: "waiting", agent_id: "main", name: "OpenCode" })
+      }
 
       try {
         const content = readFileSync(`${root}/${INSTRUCTIONS_FILE}`, "utf8").trim()
@@ -175,6 +290,12 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
           output.message.system = [output.message.system, content].filter(Boolean).join("\n\n")
         }
       } catch {}
+    },
+
+    // Blocking permission hook — fires even when the permission.asked bus
+    // event is unavailable in a given CLI version.
+    "permission.ask": async () => {
+      await send({ kind: "permission_required" })
     },
   }
 }

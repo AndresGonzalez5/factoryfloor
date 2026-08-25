@@ -2321,12 +2321,6 @@ private struct TerminalSurfaceView: NSViewRepresentable {
 private struct QuickActionDebugView: View {
     @ObservedObject var runner: QuickActionRunner
 
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f
-    }()
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -2353,35 +2347,7 @@ private struct QuickActionDebugView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(runner.log) { entry in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Text(Self.timeFormatter.string(from: entry.timestamp))
-                                        .foregroundStyle(.tertiary)
-                                    Text(entry.action.label)
-                                        .foregroundStyle(.primary)
-                                    if let code = entry.exitCode {
-                                        Text("exit \(code)")
-                                            .foregroundStyle(code == 0 ? .green : .red)
-                                    } else {
-                                        ProgressView()
-                                            .controlSize(.mini)
-                                    }
-                                }
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-
-                                Text("$ " + entry.command)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-
-                                if !entry.output.isEmpty {
-                                    Text(entry.output)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.primary)
-                                        .textSelection(.enabled)
-                                }
-                            }
-                            .padding(.horizontal, 8)
+                            QuickActionLogRow(entry: entry)
                         }
                     }
                     .padding(.vertical, 4)
@@ -2390,6 +2356,97 @@ private struct QuickActionDebugView: View {
         }
         .frame(height: 200)
         .background(.background)
+    }
+}
+
+private struct QuickActionLogRow: View {
+    let entry: QuickActionLogEntry
+    @State private var showsRawOutput = false
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(Self.timeFormatter.string(from: entry.timestamp))
+                    .foregroundStyle(.tertiary)
+                Text(entry.action.label)
+                    .foregroundStyle(.primary)
+                if let code = entry.exitCode {
+                    Text("exit \(code)")
+                        .foregroundStyle(code == 0 ? .green : .red)
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+            }
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+
+            Text("$ " + entry.command)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            summarySection
+
+            if !entry.output.isEmpty {
+                DisclosureGroup(isExpanded: $showsRawOutput) {
+                    Text(entry.output)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } label: {
+                    Text("Raw output")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+
+    /// Parsed assistant-text result, or a placeholder while streaming.
+    @ViewBuilder
+    private var summarySection: some View {
+        if let summary = entry.summary, !summary.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let artifactURL = entry.artifactURL, let url = URL(string: artifactURL) {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Label(artifactLabel, systemImage: "arrow.up.forward")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .help(url.absoluteString)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 5))
+        } else if entry.exitCode == nil {
+            Text("Working…")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var artifactLabel: String {
+        if entry.artifactURL?.contains("/pull/") == true {
+            return NSLocalizedString("Open Pull Request", comment: "Opens the PR created by a quick action")
+        }
+        return NSLocalizedString("Open Link", comment: "Opens an artifact link produced by a quick action")
     }
 }
 

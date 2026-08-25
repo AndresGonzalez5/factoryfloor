@@ -421,3 +421,9 @@
 "Install %@ to use the Coding Agent." = "Installera %@ för att använda kodningsagenten.";
 "Install %@" = "Installera %@";
 "%@ is not installed." = "%@ är inte installerat.";
+
+/* Quick action results */
+"Raw output" = "Rå utdata";
+"Open Pull Request" = "Öppna pull request";
+"Open Link" = "Öppna länk";
+"Working…" = "Arbetar…";

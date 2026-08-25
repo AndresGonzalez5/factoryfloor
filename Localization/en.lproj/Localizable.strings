@@ -421,3 +421,9 @@
 "Install %@ to use the Coding Agent." = "Install %@ to use the Coding Agent.";
 "Install %@" = "Install %@";
 "%@ is not installed." = "%@ is not installed.";
+
+/* Quick action results */
+"Raw output" = "Raw output";
+"Open Pull Request" = "Open Pull Request";
+"Open Link" = "Open Link";
+"Working…" = "Working…";

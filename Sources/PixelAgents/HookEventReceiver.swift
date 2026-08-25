@@ -385,6 +385,10 @@ final class HookEventReceiver: @unchecked Sendable {
             event.name = name
             return [event]
 
+        case "agent_info":
+            // Attribute refresh (display name, model) — no state change.
+            return [AgentEvent.info(agentId: aid, name: name, model: eventInput["model"] as? String)]
+
         case "idle":
             return [AgentEvent.idle(agentId: aid)]
 

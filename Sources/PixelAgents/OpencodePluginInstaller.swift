@@ -9,7 +9,7 @@ private let logger = Logger(subsystem: "factoryfloor", category: "opencode-plugi
 enum OpencodePluginInstaller {
 
     /// Bump when the bundled factoryfloor-opencode.js changes so existing installs refresh.
-    private static let pluginVersion = 1
+    private static let pluginVersion = 2
 
     private static var pluginsDirectory: String {
         FileManager.default.homeDirectoryForCurrentUser

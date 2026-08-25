@@ -421,3 +421,9 @@
 "Install %@ to use the Coding Agent." = "Instala %@ para usar el agente de codificación.";
 "Install %@" = "Instalar %@";
 "%@ is not installed." = "%@ no está instalado.";
+
+/* Quick action results */
+"Raw output" = "Salida en bruto";
+"Open Pull Request" = "Abrir pull request";
+"Open Link" = "Abrir enlace";
+"Working…" = "Trabajando…";

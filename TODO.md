@@ -96,6 +96,7 @@
 - [x] Harness picker in new-workstream sheet, global default setting, sidebar badges
 - [x] Switch-harness context menu with surface teardown + tmux kill
 - [x] OpenCode GitHub quick actions (opencode run -c --fork)
-- [ ] OpenCode subagent roster is best-effort (child session events; no per-subagent tool attribution like Claude's SubagentStart/Stop)
-- [ ] OpenCode quick-action output shows raw JSON event stream; could parse assistant text for cleaner display
+- [x] OpenCode subagent roster: child-session name map + `agent_info` events (agent type, model attribute on roster lines), `session.status`, subtask spawn signal, sprite aliases for build/general/ask
+- [x] OpenCode quick-action output parsed from `--format json` stream into a summary + PR link; raw JSONL collapsed behind disclosure
+- [x] Fixed: quick-action forks hijacked `.factoryfloor-state/opencode-session` (sentinel file makes the plugin ignore quick-action subprocesses)
 - [ ] Future harnesses (e.g., Codex): add enum case + command builder branch + event mapper

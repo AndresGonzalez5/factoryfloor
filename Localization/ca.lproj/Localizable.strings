@@ -421,3 +421,9 @@
 "Install %@ to use the Coding Agent." = "Instal·la %@ per utilitzar l'agent de codi.";
 "Install %@" = "Instal·la %@";
 "%@ is not installed." = "%@ no està instal·lat.";
+
+/* Quick action results */
+"Raw output" = "Sortida en cru";
+"Open Pull Request" = "Obre el pull request";
+"Open Link" = "Obre l'enllaç";
+"Working…" = "Treballant…";
