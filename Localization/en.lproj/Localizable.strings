@@ -409,6 +409,7 @@
 "+%d more" = "+%d more";
 "Stalled" = "Stalled";
 "Agent may be stalled" = "Agent may be stalled";
+"Context window usage" = "Context window usage";
 "%lld agents active" = "%lld agents active";
 
 /* Multi-harness support */

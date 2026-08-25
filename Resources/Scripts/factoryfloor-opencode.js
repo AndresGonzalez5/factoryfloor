@@ -40,7 +40,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
 
   // childSessionID -> display name ("build", "plan", "general", custom agents)
   const children = new Map()
-  // Dedup guard for assistant info events: agent_id -> "name|model"
+  // Dedup guard for assistant info events: agent_id -> "name|model|contextUsed"
   const lastInfo = new Map()
 
   let sentinelCache = { value: false, at: 0 }
@@ -176,7 +176,17 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             const aid = agentIdFor(sessionID)
             const name = displayNameFor(sessionID)
             const model = info.modelID || ""
-            const fingerprint = `${name}|${model}`
+            // Assistant info carries cumulative token counts; sum the
+            // context-relevant sides defensively (fields are all optional).
+            const tokens = info.tokens
+            let contextUsed = 0
+            if (tokens && typeof tokens === "object") {
+              const cache = tokens.cache || {}
+              contextUsed = (tokens.input || 0) + (cache.read || 0) + (cache.write || 0)
+            }
+            // Context grows across a turn; keep it in the fingerprint so
+            // refreshed totals flow through despite identical name/model.
+            const fingerprint = `${name}|${model}|${contextUsed}`
             if (lastInfo.get(aid) !== fingerprint) {
               lastInfo.set(aid, fingerprint)
               await send({
@@ -184,6 +194,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
                 agent_id: aid,
                 name,
                 model: model || undefined,
+                ...(contextUsed > 0 ? { context_used: contextUsed } : {}),
               })
             }
           }

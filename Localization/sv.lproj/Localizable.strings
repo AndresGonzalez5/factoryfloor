@@ -409,6 +409,7 @@
 "+%d more" = "+%d till";
 "Stalled" = "Avstannad";
 "Agent may be stalled" = "Agenten kan ha stannat";
+"Context window usage" = "Kontextfönsteranvändning";
 "%lld agents active" = "%lld aktiva agenter";
 
 /* Multi-harness support */

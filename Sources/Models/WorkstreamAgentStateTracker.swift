@@ -57,15 +57,36 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         var activity: String?
         /// Model backing the run when the harness reports one.
         var model: String?
+        /// Per-run context figures when the harness reports them directly
+        /// (e.g. OpenCode child sessions via agent_info).
+        var contextUsedTokens: Int?
+        var contextLimitTokens: Int?
         let startedAt: Date
         var lastEventAt: Date
     }
 
+    /// Context-window consumption of a workstream's main session.
+    struct ContextUsage: Equatable {
+        let usedTokens: Int
+        let limitTokens: Int
+        var fraction: Double {
+            limitTokens > 0 ? Double(usedTokens) / Double(limitTokens) : 0
+        }
+    }
+
     static let stallThreshold: TimeInterval = 45
     private static let sweepInterval: TimeInterval = 15
+    private static let contextReadInterval: TimeInterval = 5
 
     @Published private(set) var states: [UUID: AgentRunState] = [:]
     @Published private(set) var rosters: [UUID: [AgentRun]] = [:]
+    /// Workstreams that have seen harness activity during this app launch.
+    /// In-memory only by design ("part of my work today").
+    @Published private(set) var liveSessionIDs: Set<UUID> = []
+    /// Latest known context-window usage for each workstream's MAIN session.
+    @Published private(set) var contextUsage: [UUID: ContextUsage] = [:]
+
+    private var lastContextReadAt: [UUID: Date] = [:]
 
     /// Resolves a Claude `project_dir` payload to the matching workstream UUID.
     /// Set by `ContentView` whenever the project list changes.
@@ -103,16 +124,40 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         }
     }
 
+    /// True while the workstream has seen harness activity this app launch.
+    func hasLiveSession(for id: UUID) -> Bool {
+        liveSessionIDs.contains(id)
+    }
+
+    /// Context usage of the workstream's main session, regardless of harness:
+    /// prefers the transcript-derived figure (Claude Code), falling back to
+    /// the per-run totals the harness reported (OpenCode `agent_info`).
+    /// Returns nil while no main run is live or nothing has been reported yet.
+    func mainContextUsage(for id: UUID) -> ContextUsage? {
+        if let rowLevel = contextUsage[id] { return rowLevel }
+        guard let main = rosters[id]?.first(where: { $0.isMain }),
+              let used = main.contextUsedTokens,
+              let limit = main.contextLimitTokens,
+              limit > 0 else { return nil }
+        return ContextUsage(usedTokens: used, limitTokens: limit)
+    }
+
     /// Drops all tracked state for a workstream (called when it is removed).
     func clear(workstreamID: UUID) {
         states.removeValue(forKey: workstreamID)
         rosters.removeValue(forKey: workstreamID)
+        liveSessionIDs.remove(workstreamID)
+        contextUsage.removeValue(forKey: workstreamID)
+        lastContextReadAt.removeValue(forKey: workstreamID)
     }
 
     /// Clears every tracked state. Used by tests to isolate cases.
     func resetForTesting() {
         states.removeAll()
         rosters.removeAll()
+        liveSessionIDs.removeAll()
+        contextUsage.removeAll()
+        lastContextReadAt.removeAll()
         workstreamLookup = nil
         currentSelection = nil
     }
@@ -143,9 +188,13 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         }
 
         ensureSweepTimer()
+        liveSessionIDs.insert(wsID)
         updateRoster(wsID: wsID, event: event)
         if event.agentId == "main" {
             updateMainState(wsID: wsID, event: event)
+            if let transcriptPath = event.transcriptPath {
+                refreshContextUsage(wsID: wsID, transcriptPath: transcriptPath, force: event.type == .agentIdle)
+            }
         }
     }
 
@@ -217,6 +266,12 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                 if let model = event.model {
                     list[idx].model = model
                 }
+                if let used = event.contextUsedTokens {
+                    list[idx].contextUsedTokens = used
+                }
+                if let limit = event.contextLimitTokens {
+                    list[idx].contextLimitTokens = limit
+                }
                 list[idx].lastEventAt = now
             }
 
@@ -242,6 +297,20 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             list.sort { ($0.isMain ? 0 : 1, $0.startedAt) < ($1.isMain ? 0 : 1, $1.startedAt) }
             rosters[wsID] = list
         }
+    }
+
+    /// Reads context usage from the transcript tail. Throttled to one read per
+    /// `contextReadInterval` — except at turn end (idle), where the final
+    /// totals must land even if a read just happened. A failed read keeps any
+    /// previous value.
+    private func refreshContextUsage(wsID: UUID, transcriptPath: String, force: Bool) {
+        let now = Date()
+        if !force, let last = lastContextReadAt[wsID], now.timeIntervalSince(last) < Self.contextReadInterval {
+            return
+        }
+        lastContextReadAt[wsID] = now
+        guard let parsed = TranscriptContextReader.usage(transcriptPath: transcriptPath) else { return }
+        contextUsage[wsID] = ContextUsage(usedTokens: parsed.usedTokens, limitTokens: parsed.limitTokens)
     }
 
     private func updateMainState(wsID: UUID, event: AgentEvent) {

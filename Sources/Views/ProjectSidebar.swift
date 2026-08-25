@@ -204,6 +204,8 @@ struct ProjectSidebar: View {
                         let branch = appEnv.branchName(for: workstream.worktreePath)
                         let pr = branch.flatMap { appEnv.githubPR(for: project.directory, branch: $0) }
                         let wsRuns = agentStateTracker.runs(for: workstream.id)
+                        let mainRun = wsRuns.first(where: \.isMain)
+                        let subRuns = wsRuns.filter { !$0.isMain }
 
                         VStack(alignment: .leading, spacing: 2) {
                             WorkstreamRow(
@@ -212,7 +214,10 @@ struct ProjectSidebar: View {
                                 worktreePath: workstream.worktreePath,
                                 isPathValid: appEnv.isPathValid(workstream.worktreePath),
                                 agentState: agentStateTracker.state(for: workstream.id),
-                                activeRunCount: wsRuns.count,
+                                hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
+                                portraitName: workstream.harness == .opencode ? "OpenCode" : "Claude",
+                                mainActivity: mainRun?.activity,
+                                mainContextUsage: mainRun == nil ? nil : agentStateTracker.mainContextUsage(for: workstream.id),
                                 githubURL: appEnv.githubURL(for: project.directory),
                                 taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
                                 prTitle: pr?.title,
@@ -225,15 +230,15 @@ struct ProjectSidebar: View {
                                 onRename: { promptRenameWorkstream(workstream) }
                             )
 
-                            if !wsRuns.isEmpty {
-                                WorkstreamAgentRosterView(runs: wsRuns) {
+                            if !subRuns.isEmpty {
+                                WorkstreamAgentRosterView(runs: subRuns) {
                                     selectAndFocusAgent(workstreamID: workstream.id)
                                 }
-                                .padding(.leading, 12)
+                                .padding(.leading, 6)
                             }
                         }
                         .tag(SidebarSelection.workstream(workstream.id))
-                        .padding(.leading, 28)
+                        .padding(.leading, 8)
                     }
                 }
             }
@@ -999,7 +1004,10 @@ private struct WorkstreamRow: View {
     var worktreePath: String?
     let isPathValid: Bool
     var agentState: WorkstreamAgentStateTracker.AgentRunState = .idle
-    var activeRunCount: Int = 0
+    var hasLiveSession: Bool = false
+    var portraitName: String = "Claude"
+    var mainActivity: String?
+    var mainContextUsage: WorkstreamAgentStateTracker.ContextUsage?
     var githubURL: URL?
     var taskDescription: String?
     var prTitle: String?
@@ -1034,22 +1042,24 @@ private struct WorkstreamRow: View {
         return nil
     }
 
-    /// Color for the live-agent count badge, matching the row state.
-    private var runCountColor: Color {
-        if case .stalled = agentState { return .orange }
-        return .green
+    /// The main session's context meter shows while the agent is actively
+    /// spending context (working or stalled); idle/attention states hide it.
+    private var showsMainContextMeter: Bool {
+        guard mainContextUsage != nil else { return false }
+        switch agentState {
+        case .working, .stalled: return true
+        case .idle, .needsAttention: return false
+        }
     }
 
     var body: some View {
         HStack(spacing: 4) {
-            AgentStateIndicator(state: agentState, isPathValid: isPathValid)
-
-            if activeRunCount > 0 {
-                Text("×\(activeRunCount)")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundStyle(runCountColor)
-                    .accessibilityLabel(Text("\(activeRunCount) agents active"))
-            }
+            MainAgentPortrait(
+                state: agentState,
+                isPathValid: isPathValid,
+                hasLiveSession: hasLiveSession,
+                portraitName: portraitName
+            )
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 4) {
@@ -1072,15 +1082,31 @@ private struct WorkstreamRow: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(prState == "MERGED" ? AnyShapeStyle(.purple) : AnyShapeStyle(.tertiary))
                 }
+                if let mainActivity {
+                    Text(mainActivity)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
 
             Spacer()
 
+            if showsMainContextMeter, let usage = mainContextUsage {
+                ContextMeter(usage: usage)
+                    // Slide left while hovering so the remove button, which
+                    // overlays the trailing edge, doesn't cover the meter.
+                    .padding(.trailing, isHovering ? 26 : 2)
+                    .animation(.easeInOut(duration: 0.15), value: isHovering)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .trailing) {
             SidebarIconButton(icon: "xmark", action: onRemove)
                 .accessibilityLabel("Remove workstream")
                 .opacity(isHovering ? 1 : 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .help(taskDescription ?? "")
         .onHover { isHovering = $0 }

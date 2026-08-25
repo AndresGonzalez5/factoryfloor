@@ -408,6 +408,7 @@
 "+%d more" = "+%d weitere";
 "Stalled" = "Blockiert";
 "Agent may be stalled" = "Agent ist möglicherweise blockiert";
+"Context window usage" = "Kontextfenster-Nutzung";
 "%lld agents active" = "%lld aktive Agenten";
 
 /* Multi-harness support */

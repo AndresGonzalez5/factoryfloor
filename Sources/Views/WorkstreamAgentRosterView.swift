@@ -1,11 +1,13 @@
-// ABOUTME: Compact per-agent status lines shown under an expanded workstream
-// ABOUTME: row while agents (main or subagents) are live in that workstream.
+// ABOUTME: Compact per-agent mini cards shown under an expanded workstream
+// ABOUTME: row while subagents are live in that workstream.
 
 import SwiftUI
 
-/// One line per live agent run: portrait, name, current activity, elapsed time.
-/// Lines exist exactly while their run is live — Claude Code's stop hooks
-/// remove them the moment an agent finishes.
+/// One mini card per live SUBAGENT run: portrait, name/model, current
+/// activity, and either a context meter or elapsed time. The main agent is
+/// not listed — its portrait, activity, and context meter live on the
+/// workstream row itself. Cards exist exactly while their run is live —
+/// Claude Code's stop hooks remove them the moment an agent finishes.
 struct WorkstreamAgentRosterView: View {
     let runs: [WorkstreamAgentStateTracker.AgentRun]
     /// Called when a roster line is clicked: selects the workstream and
@@ -25,15 +27,15 @@ struct WorkstreamAgentRosterView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(visibleRuns) { run in
-                RosterLine(run: run)
+                RosterCard(run: run)
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onSelect)
             }
             if hiddenCount > 0 {
                 Text(String(format: NSLocalizedString("+%d more", comment: "Additional agents beyond the visible roster lines"), hiddenCount))
-                    .font(.system(size: 9))
+                    .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
-                    .padding(.leading, 20)
+                    .padding(.leading, 28)
                     .onTapGesture(perform: onSelect)
             }
         }
@@ -50,49 +52,72 @@ struct WorkstreamAgentRosterView: View {
     }
 }
 
-// MARK: - Single roster line
+// MARK: - Single roster card
 
-private struct RosterLine: View {
+private struct RosterCard: View {
     let run: WorkstreamAgentStateTracker.AgentRun
 
+    /// Child sessions carry per-run context figures from the harness.
+    private var contextUsage: WorkstreamAgentStateTracker.ContextUsage? {
+        guard let used = run.contextUsedTokens,
+              let limit = run.contextLimitTokens,
+              limit > 0 else { return nil }
+        return WorkstreamAgentStateTracker.ContextUsage(usedTokens: used, limitTokens: limit)
+    }
+
     var body: some View {
-        HStack(spacing: 5) {
-            AvatarWithState(name: run.name, palette: run.palette, variant: run.variantIndex, state: run.state)
+        HStack(spacing: 8) {
+            RosterAvatar(name: run.name, palette: run.palette, variant: run.variantIndex, state: run.state)
 
-            Text(run.name)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(run.name)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
 
-            if let model = run.model {
-                Text(model)
-                    .font(.system(size: 8))
-                    .foregroundStyle(.quaternary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 70, alignment: .leading)
-                    .help(run.name + " · " + model)
-                    .accessibilityHidden(true)
-            }
+                    if let model = run.model {
+                        Text(model)
+                            .font(.system(size: 8, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: 60, alignment: .leading)
+                            .help(run.name + " · " + model)
+                            .accessibilityHidden(true)
+                    }
+                }
 
-            if let activity = run.activity {
-                Text(activity)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if let activity = run.activity {
+                    Text(activity)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
 
             Spacer(minLength: 4)
 
-            TrailingStatus(state: run.state, startedAt: run.startedAt)
+            VStack(alignment: .trailing, spacing: 2) {
+                if run.state == .stalled {
+                    Text("Stalled")
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.orange)
+                } else if let usage = contextUsage {
+                    ContextMeter(usage: usage)
+                } else {
+                    ElapsedLabel(startedAt: run.startedAt)
+                }
+            }
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
     }
 }
 
 // MARK: - Avatar
 
-private struct AvatarWithState: View {
+private struct RosterAvatar: View {
     let name: String?
     let palette: Int
     let variant: Int
@@ -117,14 +142,14 @@ private struct AvatarWithState: View {
                     .resizable()
                     .interpolation(.none)
                     .scaledToFit()
-                    .padding(1.5)
+                    .padding(2)
             } else {
-                Image(systemName: "person.crop.circle")
-                    .font(.system(size: 8))
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 13, height: 13)
+        .frame(width: 20, height: 20)
         .onChange(of: state) { _, newValue in
             isPulsing = (newValue == .working)
         }
@@ -135,27 +160,18 @@ private struct AvatarWithState: View {
     }
 }
 
-// MARK: - Trailing status
+// MARK: - Elapsed time
 
-private struct TrailingStatus: View {
-    let state: WorkstreamAgentStateTracker.AgentRun.RunState
+private struct ElapsedLabel: View {
     let startedAt: Date
 
     var body: some View {
-        Group {
-            if state == .stalled {
-                Text("Stalled")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.orange)
-            } else {
-                TimelineView(.periodic(from: .now, by: 30)) { _ in
-                    Text(Self.elapsed(from: startedAt))
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(.quaternary)
-                }
-            }
+        TimelineView(.periodic(from: .now, by: 30)) { _ in
+            Text(Self.elapsed(from: startedAt))
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.quaternary)
         }
-        .accessibilityHidden(state != .stalled)
+        .accessibilityHidden(true)
     }
 
     private static func elapsed(from start: Date) -> String {

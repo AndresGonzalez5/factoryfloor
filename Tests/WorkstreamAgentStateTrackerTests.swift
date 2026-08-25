@@ -368,4 +368,155 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         let cutoff = Date().addingTimeInterval(-WorkstreamAgentStateTracker.stallThreshold)
         XCTAssertGreaterThan(tracker.runs(for: wsID)[0].lastEventAt, cutoff)
     }
+
+    // MARK: - Live session presence
+
+    func testHasLiveSessionIsFalseByDefault() {
+        XCTAssertFalse(tracker.hasLiveSession(for: wsID))
+        XCTAssertTrue(tracker.liveSessionIDs.isEmpty)
+    }
+
+    func testHandledEventMarksLiveSession() {
+        handle(.waiting(agentId: "main"))
+        XCTAssertTrue(tracker.hasLiveSession(for: wsID))
+        XCTAssertTrue(tracker.liveSessionIDs.contains(wsID))
+    }
+
+    func testClearRemovesLiveSessionFlag() {
+        handle(.waiting(agentId: "main"))
+        tracker.clear(workstreamID: wsID)
+        XCTAssertFalse(tracker.hasLiveSession(for: wsID))
+    }
+
+    // MARK: - Context-window usage
+
+    private func tempTranscriptURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("ff-tracker-tests-\(UUID().uuidString).jsonl")
+    }
+
+    private func writeTranscript(url: URL, usedTokens: Int, model: String = "claude-sonnet-4-5") throws {
+        let line = "{\"type\":\"assistant\",\"message\":{\"model\":\"\(model)\",\"usage\":{\"input_tokens\":\(usedTokens),\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}"
+        try line.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func testTranscriptPathPopulatesContextUsage() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 1234)
+
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+
+        let usage = try XCTUnwrap(tracker.contextUsage[wsID])
+        XCTAssertEqual(usage.usedTokens, 1234)
+        XCTAssertEqual(usage.limitTokens, 200_000)
+        XCTAssertEqual(usage.fraction, Double(1234) / 200_000, accuracy: 1e-12)
+    }
+
+    func testContextUsageReadIsThrottledWithinFiveSeconds() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 100)
+
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 100)
+
+        // Rewrite the transcript; the throttle must skip the re-read.
+        try writeTranscript(url: url, usedTokens: 9000)
+        handle(.toolStart(agentId: "main", tool: "Bash", transcriptPath: url.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 100)
+    }
+
+    func testAgentIdleAlwaysRereadsTranscript() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 100)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+
+        try writeTranscript(url: url, usedTokens: 9000)
+        handle(.idle(agentId: "main", transcriptPath: url.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 9000)
+    }
+
+    func testFailedReadKeepsPreviousContextUsage() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 100)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 100)
+
+        // Remove the file so the forced idle re-read fails; the previous
+        // value must stick.
+        try FileManager.default.removeItem(at: url)
+        handle(.idle(agentId: "main", transcriptPath: url.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 100)
+    }
+
+    func testClearRemovesLiveSessionAndContextUsage() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 10)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        XCTAssertTrue(tracker.hasLiveSession(for: wsID))
+        XCTAssertNotNil(tracker.contextUsage[wsID])
+
+        tracker.clear(workstreamID: wsID)
+        XCTAssertFalse(tracker.hasLiveSession(for: wsID))
+        XCTAssertNil(tracker.contextUsage[wsID])
+    }
+
+    func testAgentInfoAppliesContextFieldsToRun() {
+        handle(.waiting(agentId: "main"))
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000
+        ))
+        let run = tracker.runs(for: wsID).first
+        XCTAssertEqual(run?.contextUsedTokens, 42_000)
+        XCTAssertEqual(run?.contextLimitTokens, 200_000)
+    }
+
+    func testMainContextUsageFallsBackToRunReportedTokens() {
+        handle(.waiting(agentId: "main"))
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000
+        ))
+
+        let usage = tracker.mainContextUsage(for: wsID)
+        XCTAssertEqual(usage?.usedTokens, 42_000)
+        XCTAssertEqual(usage?.limitTokens, 200_000)
+    }
+
+    func testMainContextUsagePrefersTranscriptOverRunTokens() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 100)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000
+        ))
+
+        XCTAssertEqual(tracker.mainContextUsage(for: wsID)?.usedTokens, 100)
+    }
+
+    func testMainContextUsageNilWithoutLiveMainRun() {
+        handle(.waiting(agentId: "main"))
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000
+        ))
+        handle(.idle(agentId: "main"))
+
+        XCTAssertNil(tracker.mainContextUsage(for: wsID))
+    }
 }

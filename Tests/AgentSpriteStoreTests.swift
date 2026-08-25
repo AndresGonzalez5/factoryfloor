@@ -42,15 +42,40 @@ final class AgentSpriteStoreTests: XCTestCase {
         XCTAssertNil(AgentSpriteStore.shared.spriteFile(for: "definitelynotatype", variant: 0))
     }
 
+    // MARK: - Alias resolution
+
+    func testResolutionKeysTryOwnArtBeforeAlias() {
+        XCTAssertEqual(AgentSpriteStore.resolutionKeys(for: "scout"), ["scout", "explore"])
+        XCTAssertEqual(AgentSpriteStore.resolutionKeys(for: "build"), ["build", "claude"])
+        XCTAssertEqual(AgentSpriteStore.resolutionKeys(for: "general"), ["general", "generalpurpose"])
+        // Types with no alias resolve only themselves.
+        XCTAssertEqual(AgentSpriteStore.resolutionKeys(for: "claude"), ["claude"])
+        XCTAssertEqual(AgentSpriteStore.resolutionKeys(for: "explore"), ["explore"])
+        // Empty names resolve to nothing.
+        XCTAssertEqual(AgentSpriteStore.resolutionKeys(for: ""), [])
+    }
+
+    func testAliasedOpenCodeTypesResolveToArt() {
+        let store = AgentSpriteStore.shared
+        // Scout has no dedicated art yet; the alias fills the gap with the
+        // explore set.
+        XCTAssertNotNil(store.avatar(name: "Scout", palette: 1, variant: 0))
+        XCTAssertNotNil(store.avatar(name: "general", palette: 1, variant: 0))
+        XCTAssertNotNil(store.avatar(name: "build", palette: 1, variant: 0))
+        XCTAssertNotNil(store.avatar(name: "plan", palette: 1, variant: 0))
+    }
+
     func testAvatarResolvesForKnownAndUnknownTypes() {
         let store = AgentSpriteStore.shared
         // Numbered set member.
         XCTAssertNotNil(store.avatar(name: "Explore", palette: 1, variant: 2))
         // Cycling variant reuses set member.
         XCTAssertNotNil(store.avatar(name: "Explore", palette: 1, variant: 4))
-        // Type without a set falls back to single portrait, then legacy sheets.
-        XCTAssertNotNil(store.avatar(name: "SomeCustomAgent", palette: 2, variant: 0))
-        // Main agent.
+        // Main agents for both harnesses.
         XCTAssertNotNil(store.avatar(name: "Claude", palette: 0, variant: 0))
+        XCTAssertNotNil(store.avatar(name: "OpenCode", palette: 0, variant: 0))
+        // Type without any art resolves to nil; views substitute a
+        // neutral SF Symbol placeholder.
+        XCTAssertNil(store.avatar(name: "SomeCustomAgent", palette: 2, variant: 0))
     }
 }

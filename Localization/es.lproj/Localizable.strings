@@ -409,6 +409,7 @@
 "+%d more" = "+%d más";
 "Stalled" = "Estancado";
 "Agent may be stalled" = "El agente podría estar estancado";
+"Context window usage" = "Uso de la ventana de contexto";
 "%lld agents active" = "%lld agentes activos";
 
 /* Multi-harness support */

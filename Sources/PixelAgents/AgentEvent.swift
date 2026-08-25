@@ -16,6 +16,14 @@ struct AgentEvent: Codable, Sendable {
     var parentAgentId: String?
     /// Model identifier reported by the harness (e.g. "claude-sonnet-4-5").
     var model: String?
+    /// Harness transcript location (Claude Code hook payloads); the tracker
+    /// reads context-window usage from its tail.
+    var transcriptPath: String?
+    /// Tokens consumed so far in the session context, when the harness reports
+    /// them directly (OpenCode agent_info payloads).
+    var contextUsedTokens: Int?
+    /// Model-derived context-window ceiling accompanying `contextUsedTokens`.
+    var contextLimitTokens: Int?
 
     enum EventType: String, Codable, Sendable {
         case agentCreated
@@ -38,6 +46,9 @@ struct AgentEvent: Codable, Sendable {
         case status
         case parentAgentId
         case model
+        case transcriptPath
+        case contextUsedTokens
+        case contextLimitTokens
     }
 
     // -- Factory methods --
@@ -50,31 +61,40 @@ struct AgentEvent: Codable, Sendable {
         AgentEvent(type: .agentRemoved, agentId: agentId)
     }
 
-    static func status(agentId: String, status: String) -> AgentEvent {
-        AgentEvent(type: .agentStatus, agentId: agentId, status: status)
+    static func status(agentId: String, status: String, transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentStatus, agentId: agentId, status: status, transcriptPath: transcriptPath)
     }
 
-    static func toolStart(agentId: String, tool: String, activity: String? = nil) -> AgentEvent {
-        AgentEvent(type: .agentToolStart, agentId: agentId, tool: tool, activity: activity)
+    static func toolStart(agentId: String, tool: String, activity: String? = nil, transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentToolStart, agentId: agentId, tool: tool, activity: activity, transcriptPath: transcriptPath)
     }
 
-    static func toolDone(agentId: String) -> AgentEvent {
-        AgentEvent(type: .agentToolDone, agentId: agentId)
+    static func toolDone(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentToolDone, agentId: agentId, transcriptPath: transcriptPath)
     }
 
-    static func idle(agentId: String) -> AgentEvent {
-        AgentEvent(type: .agentIdle, agentId: agentId)
+    static func idle(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentIdle, agentId: agentId, transcriptPath: transcriptPath)
     }
 
-    static func waiting(agentId: String) -> AgentEvent {
-        AgentEvent(type: .agentWaiting, agentId: agentId)
+    static func waiting(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentWaiting, agentId: agentId, transcriptPath: transcriptPath)
     }
 
-    /// Attribute refresh for an existing roster run (display name, model).
-    static func info(agentId: String, name: String?, model: String? = nil) -> AgentEvent {
-        var event = AgentEvent(type: .agentInfo, agentId: agentId)
+    /// Attribute refresh for an existing roster run (display name, model,
+    /// context-window figures).
+    static func info(
+        agentId: String,
+        name: String?,
+        model: String? = nil,
+        contextUsedTokens: Int? = nil,
+        transcriptPath: String? = nil
+    ) -> AgentEvent {
+        var event = AgentEvent(type: .agentInfo, agentId: agentId, transcriptPath: transcriptPath)
         event.name = name
         event.model = model
+        event.contextUsedTokens = contextUsedTokens
+        event.contextLimitTokens = ContextLimits.limitTokens(forModel: model)
         return event
     }
 }
