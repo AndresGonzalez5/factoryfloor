@@ -405,10 +405,17 @@
 "Running command" = "Kör kommando";
 "Browsing" = "Surfar";
 "Planning" = "Planerar";
+"Delegating" = "Delegerar";
 "Sub-agent" = "Underagent";
 "+%d more" = "+%d till";
 "Stalled" = "Avstannad";
+"Working" = "Arbetar";
+"Waiting for approval" = "Väntar på godkännande";
+"Done" = "Klar";
+"Idle" = "Inaktiv";
 "Agent may be stalled" = "Agenten kan ha stannat";
+"Context window usage" = "Kontextfönsteranvändning";
+"Context: %1$lld tokens · %2$lld%%" = "Kontext: %1$lld tokens · %2$lld%%";
 "%lld agents active" = "%lld aktiva agenter";
 
 /* Multi-harness support */

@@ -280,14 +280,31 @@ final class HookEventReceiver: @unchecked Sendable {
             return NSLocalizedString("Browsing", comment: "Agent is fetching web content")
         case "todowrite", "todoread":
             return NSLocalizedString("Planning", comment: "Agent is updating its task plan")
+        case "task":
+            return NSLocalizedString("Delegating", comment: "Agent is delegating to a subagent")
         default:
-            return nil
+            // Custom/MCP tools surface verbatim so the row always says
+            // something specific about what's running.
+            return toolName.isEmpty ? nil : toolName
         }
     }
 
     /// Maps a Claude Code hook event to zero or more `AgentEvent` values.
     /// Must be called on `self.queue`.
     private func mapHookEvent(hookEventName: String, eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
+        // Every Claude Code hook payload carries the session transcript path;
+        // attach it so the tracker can read context-window usage from its tail.
+        let transcriptPath = eventInput["transcript_path"] as? String
+        let events = baseHookEvents(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
+        guard let transcriptPath else { return events }
+        return events.map { event in
+            var event = event
+            event.transcriptPath = transcriptPath
+            return event
+        }
+    }
+
+    private func baseHookEvents(hookEventName: String, eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
         switch hookEventName {
         case "PreToolUse":
             let toolName = eventInput["tool_name"] as? String ?? "unknown"
@@ -386,13 +403,25 @@ final class HookEventReceiver: @unchecked Sendable {
             return [event]
 
         case "agent_info":
-            // Attribute refresh (display name, model) — no state change.
-            return [AgentEvent.info(agentId: aid, name: name, model: eventInput["model"] as? String)]
+            // Attribute refresh (display name, model, context) — no state change.
+            // Prefer the plugin-computed total; older plugins may send the raw
+            // token dict instead, so fall back to summing it.
+            let model = eventInput["model"] as? String
+            var contextUsed: Int?
+            if let reported = eventInput["context_used"] as? Int {
+                contextUsed = reported > 0 ? reported : nil
+            } else if let tokens = eventInput["tokens"] as? [String: Any] {
+                let used = TranscriptContextReader.usedTokens(fromOpencodeTokens: tokens)
+                contextUsed = used > 0 ? used : nil
+            }
+            return [AgentEvent.info(agentId: aid, name: name, model: model, contextUsedTokens: contextUsed)]
 
         case "idle":
             return [AgentEvent.idle(agentId: aid)]
 
         case "permission_required":
+            // Permission and question prompts both block on user input;
+            // they surface identically as row-level attention.
             return [AgentEvent.status(agentId: "main", status: "permissionRequired")]
 
         case "session_created":

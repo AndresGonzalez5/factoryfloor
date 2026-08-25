@@ -16,11 +16,10 @@ import AppKit
 ///    alphanumerics ("general-purpose" → "generalpurpose").
 /// 2. **Single type portrait** — `avatar_<type>.png` (types without variants).
 /// 3. **Palette slot** — `avatar_<n>.png` (0-5).
-/// 4. **Legacy sheets** — `char_<n>.png` 112×96 sprite sheets; the head of the
-///    front-facing idle frame (frame 1) is cropped.
 ///
-/// Portraits are 32×32 pixels sized to 16pt; views render them with
-/// `.resizable()` + `.interpolation(.none)` to keep pixels crisp.
+/// Portraits are 64×64 pixels sized to 32pt; views render them with
+/// `.resizable()` + `.interpolation(.none)` to keep pixels crisp. Types with
+/// no art at all return nil — views substitute a neutral SF Symbol placeholder.
 @MainActor
 final class AgentSpriteStore {
 
@@ -30,17 +29,20 @@ final class AgentSpriteStore {
     static let paletteCount = 6
 
     /// Sprite-set aliases: agent type names without their own sprite files
-    /// reuse an existing set. OpenCode ships `build`/`plan`/`general`/`ask`
-    /// agents; Claude Code uses `explore`/`general-purpose`/`plan`.
+    /// reuse an existing set. OpenCode ships `build`/`plan` primaries and
+    /// `general`/`explore`/`scout` subagents; Claude Code uses
+    /// `explore`/`general-purpose`/`plan`. A type's own art always wins —
+    /// aliases only fill gaps (drop `avatar_<type>_1.png` to override).
     private static let typeAliases: [String: String] = [
         "build": "claude",
         "code": "claude",
         "general": "generalpurpose",
         "ask": "explore",
+        "scout": "explore",
     ]
 
     /// Point size the avatars are normalized to.
-    static let pointSize = CGSize(width: 16, height: 16)
+    static let pointSize = CGSize(width: 32, height: 32)
 
     /// Maps a normalized type key to its numbered sprite file names, sorted by index.
     private var typeSets: [String: [String]]?
@@ -53,8 +55,8 @@ final class AgentSpriteStore {
         let slot = ((palette % Self.paletteCount) + Self.paletteCount) % Self.paletteCount
 
         if let name, !name.isEmpty {
-            let key = Self.typeAliases[Self.normalizeTypeName(name)] ?? Self.normalizeTypeName(name)
-            if !key.isEmpty {
+            let normalized = Self.normalizeTypeName(name)
+            for key in Self.resolutionKeys(for: normalized) {
                 if let file = spriteFile(for: key, variant: variant),
                    let image = cachedLookup("file:\(file)", resource: file)
                 {
@@ -68,7 +70,18 @@ final class AgentSpriteStore {
         if let image = cachedLookup("slot:\(slot)", resource: "avatar_\(slot)") {
             return image
         }
-        return legacyHeadCrop(slot: slot)
+        return nil
+    }
+
+    /// Keys to try for a normalized type name, in order: the type itself
+    /// first (so dedicated art overrides aliases), then its alias, if any.
+    static func resolutionKeys(for normalizedType: String) -> [String] {
+        guard !normalizedType.isEmpty else { return [] }
+        var keys = [normalizedType]
+        if let alias = typeAliases[normalizedType], alias != normalizedType {
+            keys.append(alias)
+        }
+        return keys
     }
 
     // MARK: - Sprite Sets
@@ -118,16 +131,6 @@ final class AgentSpriteStore {
         return image
     }
 
-    /// Crops the top half (the head) of the front-facing idle frame from a
-    /// legacy character sheet. Sheet layout: 16×32 frames in 7 columns; frame
-    /// 1 sits at x=16..32 on row 0 (front-facing).
-    private func legacyHeadCrop(slot: Int) -> NSImage? {
-        if let cached = cache["legacy:\(slot)"] { return cached }
-        let image = bundleImage(named: "char_\(slot)").flatMap { headCrop(from: $0) }
-        cache["legacy:\(slot)"] = image
-        return image
-    }
-
     /// Lowercased alphanumeric key for an agent type name.
     static func normalizeTypeName(_ name: String) -> String {
         name.lowercased().unicodeScalars
@@ -147,18 +150,5 @@ final class AgentSpriteStore {
         guard var image = NSImage(contentsOf: url) else { return nil }
         image.size = Self.pointSize
         return image
-    }
-
-    private func headCrop(from sheet: NSImage) -> NSImage? {
-        var rect = CGRect(x: 0, y: 0, width: sheet.size.width, height: sheet.size.height)
-        guard let cgImage = sheet.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
-            return nil
-        }
-        let frameX = 16
-        let crop = CGRect(x: frameX, y: 0, width: 16, height: 16)
-        guard frameX + 16 <= cgImage.width,
-              let cropped = cgImage.cropping(to: crop)
-        else { return nil }
-        return NSImage(cgImage: cropped, size: Self.pointSize)
     }
 }

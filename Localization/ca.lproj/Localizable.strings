@@ -405,10 +405,17 @@
 "Running command" = "Executant ordre";
 "Browsing" = "Navegant";
 "Planning" = "Planificant";
+"Delegating" = "Delegant";
 "Sub-agent" = "Subagent";
 "+%d more" = "+%d més";
 "Stalled" = "Aturat";
+"Working" = "Treballant";
+"Waiting for approval" = "Esperant aprovació";
+"Done" = "Fet";
+"Idle" = "Inactiu";
 "Agent may be stalled" = "Pot ser que l'agent estigui aturat";
+"Context window usage" = "Ús de la finestra de context";
+"Context: %1$lld tokens · %2$lld%%" = "Contexte: %1$lld tokens · %2$lld%%";
 "%lld agents active" = "%lld agents actius";
 
 /* Multi-harness support */

@@ -19,13 +19,23 @@ const SENTINEL_MAX_AGE_MS = 30 * 60 * 1000
 const SENTINEL_POLL_MS = 2000
 
 let cachedPort = null
+// Re-read the port file periodically: the app picks a fresh port on every
+// launch, and a plugin instance can easily outlive one (auto-update, relaunch).
+const PORT_TTL_MS = 5000
+let cachedPortAt = 0
 
 function readPort() {
-  if (cachedPort) return cachedPort
+  const now = Date.now()
+  if (cachedPort && now - cachedPortAt < PORT_TTL_MS) return cachedPort
   try {
     const value = readFileSync(PORT_FILE, "utf8").trim()
-    if (value) cachedPort = value
+    if (value) {
+      cachedPort = value
+      cachedPortAt = now
+      return value
+    }
   } catch {}
+  // File unreadable (app restarting?) — keep serving the last known port.
   return cachedPort
 }
 
@@ -40,7 +50,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
 
   // childSessionID -> display name ("build", "plan", "general", custom agents)
   const children = new Map()
-  // Dedup guard for assistant info events: agent_id -> "name|model"
+  // Dedup guard for assistant info events: agent_id -> "name|model|contextUsed"
   const lastInfo = new Map()
 
   let sentinelCache = { value: false, at: 0 }
@@ -176,7 +186,17 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             const aid = agentIdFor(sessionID)
             const name = displayNameFor(sessionID)
             const model = info.modelID || ""
-            const fingerprint = `${name}|${model}`
+            // Assistant info carries cumulative token counts; sum the
+            // context-relevant sides defensively (fields are all optional).
+            const tokens = info.tokens
+            let contextUsed = 0
+            if (tokens && typeof tokens === "object") {
+              const cache = tokens.cache || {}
+              contextUsed = (tokens.input || 0) + (cache.read || 0) + (cache.write || 0)
+            }
+            // Context grows across a turn; keep it in the fingerprint so
+            // refreshed totals flow through despite identical name/model.
+            const fingerprint = `${name}|${model}|${contextUsed}`
             if (lastInfo.get(aid) !== fingerprint) {
               lastInfo.set(aid, fingerprint)
               await send({
@@ -184,6 +204,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
                 agent_id: aid,
                 name,
                 model: model || undefined,
+                ...(contextUsed > 0 ? { context_used: contextUsed } : {}),
               })
             }
           }
@@ -227,6 +248,22 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
           break
         }
         case "permission.replied": {
+          const sessionID = extractSessionID(properties)
+          await send({
+            kind: "working",
+            agent_id: agentIdFor(sessionID),
+            name: displayNameFor(sessionID),
+          })
+          break
+        }
+        case "question.asked": {
+          // The question tool blocks mid-turn without ending the session;
+          // without this signal the row would keep pulsing "Working".
+          await send({ kind: "permission_required" })
+          break
+        }
+        case "question.replied":
+        case "question.rejected": {
           const sessionID = extractSessionID(properties)
           await send({
             kind: "working",
@@ -296,6 +333,33 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
     // event is unavailable in a given CLI version.
     "permission.ask": async () => {
       await send({ kind: "permission_required" })
+    },
+
+    // Tool execution HOOKS — OpenCode triggers these around every tool run;
+    // tool.* events do NOT arrive through the `event:` bus callback in
+    // current versions, so this is what powers the sidebar's activity text.
+    // Fire-and-forget on purpose: these hooks run before/after real tool
+    // work, so we must never add latency to them.
+    "tool.execute.before": (input, output) => {
+      const args = output?.args || {}
+      const filePath =
+        args.filePath || args.file_path || args.path || args.notebook_path || args.notebookPath || null
+      void send({
+        kind: "tool_start",
+        tool: input?.tool || "unknown",
+        file_path: filePath || undefined,
+        agent_id: agentIdFor(input?.sessionID),
+        name: displayNameFor(input?.sessionID),
+      })
+    },
+    "tool.execute.after": (input) => {
+      const sessionID = input?.sessionID
+      void send({
+        kind: "tool_done",
+        tool: input?.tool || "unknown",
+        agent_id: agentIdFor(sessionID),
+        name: displayNameFor(sessionID),
+      })
     },
   }
 }
