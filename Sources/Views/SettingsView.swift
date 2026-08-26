@@ -175,19 +175,16 @@ struct SettingsView: View {
             // MARK: - Coding Agent
 
             Section("Coding Agent") {
-                Picker("Default coding agent", selection: defaultHarness) {
-                    ForEach(CodingHarness.allCases, id: \.self) { harness in
-                        Label {
-                            Text(harness.displayName)
-                        } icon: {
-                            Image(systemName: harness.systemImageName)
-                        }
-                        .tag(harness)
-                    }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Default coding agent")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    HarnessPicker(selection: defaultHarness)
+                    Text("Used when creating new workstreams. Each workstream can override this choice.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Text("Used when creating new workstreams. Each workstream can override this choice.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 SettingToggle(
                     "Bypass permission prompts",

@@ -78,8 +78,7 @@
 "New Workstream" = "New Workstream";
 "Project" = "Project";
 "Workstream name" = "Workstream name";
-"Leave blank for a random name." = "Leave blank for a random name.";
-"This becomes the branch and worktree name." = "This becomes the branch and worktree name.";
+"Leave blank for a random name. This becomes the branch and worktree name." = "Leave blank for a random name. This becomes the branch and worktree name.";
 "That name isn't valid for a git branch." = "That name isn't valid for a git branch.";
 "A workstream with this name already exists." = "A workstream with this name already exists.";
 

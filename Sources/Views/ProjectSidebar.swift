@@ -1,6 +1,7 @@
 // ABOUTME: SwiftUI sidebar showing projects as a collapsible tree with workstreams.
 // ABOUTME: Supports adding projects via picker/drag-drop and workstreams inline.
 
+import AppKit
 import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
@@ -215,7 +216,7 @@ struct ProjectSidebar: View {
                                 isPathValid: appEnv.isPathValid(workstream.worktreePath),
                                 agentState: agentStateTracker.state(for: workstream.id),
                                 hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
-                                portraitName: workstream.harness == .opencode ? "OpenCode" : "Claude",
+                                portraitName: workstream.harness.portraitName,
                                 mainActivity: mainRun?.activity,
                                 // Passed regardless of whether the main run
                                 // is still rostered: the tracker keeps the
@@ -1215,12 +1216,28 @@ private struct WorkstreamRow: View {
                         if candidate == harness {
                             Label(candidate.displayName, systemImage: "checkmark")
                         } else {
-                            Text(candidate.displayName)
+                            Label {
+                                Text(candidate.displayName)
+                            } icon: {
+                                Image(nsImage: candidate.makeBrandDotImage())
+                            }
                         }
                     }
                 }
             } label: {
-                Label("Coding Agent", systemImage: harness.systemImageName)
+                Label {
+                    Text("Coding Agent")
+                } icon: {
+                    if let img = AgentSpriteStore.shared.avatar(name: harness.portraitName, palette: 0, variant: 0) {
+                        Image(nsImage: img)
+                            .resizable()
+                            .interpolation(.none)
+                            .frame(width: 16, height: 16)
+                            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    } else {
+                        Image(nsImage: harness.makeBrandDotImage())
+                    }
+                }
             }
             Button(action: onRename) {
                 Label("Rename…", systemImage: "pencil")
@@ -1357,15 +1374,20 @@ private struct NewWorkstreamSheet: View {
     let onCancel: () -> Void
 
     @FocusState private var isFocused: Bool
+    @State private var tabMonitor: Any?
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 18) {
             Text("New Workstream")
                 .font(.headline)
+
+            Divider()
+                .opacity(0.35)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Project")
                     .font(.caption)
+                    .fontWeight(.medium)
                     .foregroundStyle(.secondary)
                 Text(projectName)
                     .font(.system(.caption, design: .monospaced))
@@ -1373,40 +1395,31 @@ private struct NewWorkstreamSheet: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            TextField("Workstream name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .focused($isFocused)
-                .onSubmit { onAdd() }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Coding Agent")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("Coding Agent", selection: $harness) {
-                    ForEach(CodingHarness.allCases, id: \.self) { candidate in
-                        Label {
-                            Text(candidate.displayName)
-                        } icon: {
-                            Image(systemName: candidate.systemImageName)
-                        }
-                        .tag(candidate)
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Text("Workstream name")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .help(Text("Leave blank for a random name. This becomes the branch and worktree name."))
+                        .accessibilityLabel(Text("More info"))
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                TextField("", text: $name, prompt: Text(placeholder).font(.system(.body, design: .monospaced)).foregroundStyle(.tertiary))
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isFocused)
+                    .onSubmit { onAdd() }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Leave blank for a random name.")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Coding Agent")
                     .font(.caption)
+                    .fontWeight(.medium)
                     .foregroundStyle(.secondary)
-                Text(placeholder)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                Text("This becomes the branch and worktree name.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HarnessPicker(selection: $harness)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1414,6 +1427,7 @@ private struct NewWorkstreamSheet: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             HStack {
@@ -1422,11 +1436,43 @@ private struct NewWorkstreamSheet: View {
                 Spacer()
                 Button("Create", action: onAdd)
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
             }
         }
         .padding(20)
-        .frame(width: 380)
-        .onAppear { isFocused = true }
+        .frame(width: 400)
+        .onAppear {
+            isFocused = true
+            installTabMonitor()
+        }
+        .onDisappear { removeTabMonitor() }
+    }
+
+    private func installTabMonitor() {
+        guard tabMonitor == nil else { return }
+        tabMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 48,
+                  !event.modifierFlags.contains(.command),
+                  !event.modifierFlags.contains(.control),
+                  !event.modifierFlags.contains(.option) else {
+                return event
+            }
+            let forward = !event.modifierFlags.contains(.shift)
+            let all = CodingHarness.allCases
+            if let idx = all.firstIndex(of: self.harness) {
+                let next = (idx + (forward ? 1 : -1) + all.count) % all.count
+                self.harness = all[next]
+                self.isFocused = true
+            }
+            return nil
+        }
+    }
+
+    private func removeTabMonitor() {
+        if let monitor = tabMonitor {
+            NSEvent.removeMonitor(monitor)
+            tabMonitor = nil
+        }
     }
 }
 
