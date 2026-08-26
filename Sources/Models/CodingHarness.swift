@@ -34,6 +34,16 @@ enum CodingHarness: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Sprite-store key used by `AgentSpriteStore` / `MainAgentPortrait`.
+    var portraitName: String {
+        switch self {
+        case .claudeCode:
+            return "Claude"
+        case .opencode:
+            return "OpenCode"
+        }
+    }
+
     var installURL: URL {
         switch self {
         case .claudeCode:
