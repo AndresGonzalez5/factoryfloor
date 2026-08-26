@@ -9,9 +9,9 @@ private let logger = Logger(subsystem: "factoryfloor", category: "opencode-plugi
 enum OpencodePluginInstaller {
 
     /// Bump when the bundled factoryfloor-opencode.js changes so existing installs refresh.
-    /// v4: tool.execute.before/after hooks (activity text), question events,
-    /// context_used reporting, periodic hook-port re-reads.
-    private static let pluginVersion = 4
+    /// v4: tool hooks + context reporting; v5-v8: subtask descriptions, inline roster title.
+    /// v9: remove debug file logging, deduplicate description handling.
+    private static let pluginVersion = 9
 
     private static var pluginsDirectory: String {
         FileManager.default.homeDirectoryForCurrentUser

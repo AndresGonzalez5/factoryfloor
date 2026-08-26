@@ -61,6 +61,10 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         /// (e.g. OpenCode child sessions via agent_info).
         var contextUsedTokens: Int?
         var contextLimitTokens: Int?
+        /// Short task description the harness attaches to delegated subagents
+        /// (OpenCode subtask parts); rendered as a roster subtitle. Kept out of
+        /// `name` so sprite selection keeps keying off the agent type.
+        var taskDescription: String?
         let startedAt: Date
         var lastEventAt: Date
     }
@@ -231,9 +235,32 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
         switch event.type {
         case .agentCreated:
-            guard !list.contains(where: { $0.id == event.agentId }) else { return }
-            let name = event.name ?? NSLocalizedString("Sub-agent", comment: "Fallback name for an unnamed subagent")
-            upsert(event.agentId, name: name, palette: event.palette ?? 1, isMain: false, variantIndex: Self.nextVariantIndex(for: name, in: list))
+            // A duplicate create (OpenCode re-forwards the subtask part to
+            // enrich an already-registered child) refines the existing run's
+            // attributes instead of recreating it.
+            let fallbackName = NSLocalizedString("Sub-agent", comment: "Fallback name for an unnamed subagent")
+            let name = event.name ?? fallbackName
+            if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
+                if !name.isEmpty, name != list[idx].name {
+                    list[idx].name = name
+                }
+                if let description = event.taskDescription, !description.isEmpty {
+                    list[idx].taskDescription = description
+                }
+                list[idx].lastEventAt = now
+            } else {
+                upsert(
+                    event.agentId,
+                    name: name,
+                    palette: event.palette ?? 1,
+                    isMain: false,
+                    variantIndex: Self.nextVariantIndex(for: name, in: list)
+                ) { run in
+                    if let description = event.taskDescription, !description.isEmpty {
+                        run.taskDescription = description
+                    }
+                }
+            }
 
         case .agentRemoved:
             list.removeAll { $0.id == event.agentId }
