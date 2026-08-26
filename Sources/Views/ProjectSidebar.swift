@@ -1396,17 +1396,21 @@ private struct NewWorkstreamSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Workstream name")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text("Workstream name")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .help("Leave blank for a random name. This becomes the branch and worktree name.")
+                        .accessibilityLabel(Text("Leave blank for a random name. This becomes the branch and worktree name."))
+                }
                 TextField("", text: $name, prompt: Text(placeholder).font(.system(.body, design: .monospaced)).foregroundStyle(.tertiary))
                     .textFieldStyle(.roundedBorder)
                     .focused($isFocused)
                     .onSubmit { onAdd() }
-                Text("Leave blank for a random name. This becomes the branch and worktree name.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
