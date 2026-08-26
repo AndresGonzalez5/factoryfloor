@@ -3,7 +3,7 @@
 // ABOUTME: current session id for resume, and appends Factory Floor system
 // ABOUTME: instructions from .factoryfloor-state/instructions.md to each turn.
 
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 
 const PORT_FILE = `${process.env.HOME}/Library/Caches/factoryfloor/hook-port`
 const STATE_DIR = ".factoryfloor-state"
@@ -63,12 +63,18 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
   // Dedup guard for assistant info events: agent_id -> "name|model|contextUsed"
   const lastInfo = new Map()
 
-  const DEBUG_LOG = `${process.env.HOME}/Library/Caches/factoryfloor/plugin-debug.log`
-  function debugLog(msg) {
-    try {
-      const line = `${new Date().toISOString()} [${root}] ${msg}\n`
-      appendFileSync(DEBUG_LOG, line)
-    } catch {}
+  function cappedDescription(raw) {
+    if (typeof raw !== "string") return ""
+    const trimmed = raw.trim()
+    if (!trimmed) return ""
+    return trimmed.slice(0, DESCRIPTION_MAX_LENGTH)
+  }
+
+  function queueTaskDescription(raw) {
+    const capped = cappedDescription(raw)
+    if (!capped) return
+    pendingTaskQueue.push(capped)
+    if (pendingTaskQueue.length > 10) pendingTaskQueue.shift()
   }
 
   let sentinelCache = { value: false, at: 0 }
@@ -184,12 +190,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             const rawArgs = properties.args || properties.call?.arguments || properties.input || {}
             const taskDesc =
               rawArgs.description || rawArgs.Description || rawArgs.desc || null
-            if (typeof taskDesc === "string" && taskDesc.trim()) {
-              const capped = taskDesc.trim().slice(0, DESCRIPTION_MAX_LENGTH)
-              pendingTaskQueue.push(capped)
-              if (pendingTaskQueue.length > 10) pendingTaskQueue.shift()
-              debugLog(`tool.execute.before(task) queued description: ${capped}`)
-            }
+            queueTaskDescription(taskDesc)
           }
           await send({
             kind: "tool_start",
@@ -253,20 +254,12 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             // stuck with the "Sub-agent" fallback until the real name lands.
             const childID = part.sessionID || null
             const agentName = part.agent || "Sub-agent"
-            const rawDesc =
-              typeof part.description === "string"
-                ? part.description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
-                : ""
+            const rawDesc = cappedDescription(part.description)
             // If the part's description is empty, try the pending task queue
             // (task tool calls often precede the subtask part).
             let description = rawDesc
             if (!description && pendingTaskQueue.length > 0) {
               description = pendingTaskQueue[0]
-              debugLog(`subtask part: using pending task description: ${description}`)
-            } else if (description) {
-              debugLog(`subtask part: got description: ${description} agent=${agentName} child=${childID} current=${currentSession}`)
-            } else {
-              debugLog(`subtask part: no description agent=${agentName} child=${childID} hasPending=${pendingTaskQueue.length > 0} partKeys=${Object.keys(part).join(",")}`)
             }
             // Always remember the description for the session.created fallback
             // path, even when we cannot send yet (e.g. currentSession unknown).
@@ -280,7 +273,6 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
                   // Consume the pending task queue entry we used
                   if (pendingTaskQueue.length > 0 && pendingTaskQueue[0] === description) pendingTaskQueue.shift()
                 }
-                debugLog(`subtask -> sending session_created child=${childID} agent=${agentName} desc=${description || "(none)"}`)
                 await send({
                   kind: "session_created",
                   session_id: childID,
@@ -289,8 +281,6 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
                   ...(description ? { description } : {}),
                 })
               }
-            } else if (childID) {
-              debugLog(`subtask: deferred (currentSession=${currentSession} child=${childID}) stored pending desc=${description || "(none)"}`)
             }
             break
           }
@@ -355,7 +345,6 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
         case "session.created": {
           const info = properties.info || {}
           const id = info.id || properties.sessionID
-          debugLog(`session.created id=${id} parent=${info.parentID} agent=${info.agent}`)
           if (info.parentID) {
             const isChildSession = info.parentID && id !== info.parentID
             if (isChildSession) registerChild(id, info.agent || "Sub-agent")
@@ -364,14 +353,12 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             let desc = pendingDescriptions.get(id) || null
             if (!desc && pendingTaskQueue.length > 0) {
               desc = pendingTaskQueue[0]
-              debugLog(`session.created: using pending task queue desc=${desc}`)
             }
             if (desc && !describedChildren.has(id)) {
               describedChildren.add(id)
               pendingDescriptions.delete(id)
               if (pendingTaskQueue.length > 0 && pendingTaskQueue[0] === desc) pendingTaskQueue.shift()
             }
-            debugLog(`session.created -> sending child=${id} agent=${info.agent} desc=${desc || "(none)"} isChild=${isChildSession}`)
             await send({
               kind: "session_created",
               session_id: isChildSession ? id : null,
@@ -422,12 +409,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
         args.filePath || args.file_path || args.path || args.notebook_path || args.notebookPath || null
       if (input?.tool === "task") {
         const taskDesc = args.description || args.Description || args.desc || null
-        if (typeof taskDesc === "string" && taskDesc.trim()) {
-          const capped = taskDesc.trim().slice(0, DESCRIPTION_MAX_LENGTH)
-          pendingTaskQueue.push(capped)
-          if (pendingTaskQueue.length > 10) pendingTaskQueue.shift()
-          debugLog(`hook tool.execute.before(task) queued: ${capped}`)
-        }
+        queueTaskDescription(taskDesc)
       }
       void send({
         kind: "tool_start",

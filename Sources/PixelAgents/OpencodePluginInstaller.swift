@@ -15,7 +15,8 @@ enum OpencodePluginInstaller {
     /// v6: robust subtask description capture via task-tool queue + pending map.
     /// v7: verbose plugin debug logging for subtask diagnosis.
     /// v8: inline roster title ("Explore — description"), remove verbose trace.
-    private static let pluginVersion = 8
+    /// v9: remove debug file logging, deduplicate description capping/queueing.
+    private static let pluginVersion = 9
 
     private static var pluginsDirectory: String {
         FileManager.default.homeDirectoryForCurrentUser
