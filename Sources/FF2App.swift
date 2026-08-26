@@ -166,8 +166,7 @@ struct FF2App: App {
     init() {
         guard !isRunningXCTest() else { return }
 
-        // Make tooltips appear without the 2s system delay — app-wide.
-        UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay")
+        UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay") // 200ms vs system ~700-1000ms
 
         // Migrate Spaces before any view renders so the sidebar's first paint
         // already sees a valid current space and migrated project spaceIDs.

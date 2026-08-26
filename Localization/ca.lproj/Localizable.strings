@@ -78,8 +78,6 @@
 "New Workstream" = "Nou flux de treball";
 "Project" = "Projecte";
 "Workstream name" = "Nom del flux de treball";
-"Leave blank for a random name." = "Deixa-ho en blanc per obtenir un nom aleatori.";
-"This becomes the branch and worktree name." = "Aquest nom s'utilitza per a la branca i l'arbre de treball.";
 "Leave blank for a random name. This becomes the branch and worktree name." = "Deixa-ho en blanc per obtenir un nom aleatori. Aquest nom s'utilitza per a la branca i l'arbre de treball.";
 "That name isn't valid for a git branch." = "Aquest nom no és vàlid per a una branca de git.";
 "A workstream with this name already exists." = "Ja existeix un flux de treball amb aquest nom.";

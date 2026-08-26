@@ -1219,7 +1219,7 @@ private struct WorkstreamRow: View {
                             Label {
                                 Text(candidate.displayName)
                             } icon: {
-                                Image(nsImage: candidate.brandDotImage)
+                                Image(nsImage: candidate.makeBrandDotImage())
                             }
                         }
                     }
@@ -1235,7 +1235,7 @@ private struct WorkstreamRow: View {
                             .frame(width: 16, height: 16)
                             .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                     } else {
-                        Image(nsImage: harness.brandDotImage)
+                        Image(nsImage: harness.makeBrandDotImage())
                     }
                 }
             }
@@ -1404,8 +1404,8 @@ private struct NewWorkstreamSheet: View {
                     Image(systemName: "info.circle")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .help("Leave blank for a random name. This becomes the branch and worktree name.")
-                        .accessibilityLabel(Text("Leave blank for a random name. This becomes the branch and worktree name."))
+                        .help(Text("Leave blank for a random name. This becomes the branch and worktree name."))
+                        .accessibilityLabel(Text("More info"))
                 }
                 TextField("", text: $name, prompt: Text(placeholder).font(.system(.body, design: .monospaced)).foregroundStyle(.tertiary))
                     .textFieldStyle(.roundedBorder)
