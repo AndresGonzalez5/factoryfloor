@@ -11,7 +11,11 @@ enum OpencodePluginInstaller {
     /// Bump when the bundled factoryfloor-opencode.js changes so existing installs refresh.
     /// v4: tool.execute.before/after hooks (activity text), question events,
     /// context_used reporting, periodic hook-port re-reads.
-    private static let pluginVersion = 4
+    /// v5: subtask descriptions forwarded with session_created (sidebar subtitles).
+    /// v6: robust subtask description capture via task-tool queue + pending map.
+    /// v7: verbose plugin debug logging for subtask diagnosis.
+    /// v8: inline roster title ("Explore — description"), remove verbose trace.
+    private static let pluginVersion = 8
 
     private static var pluginsDirectory: String {
         FileManager.default.homeDirectoryForCurrentUser

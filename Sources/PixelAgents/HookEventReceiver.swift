@@ -289,6 +289,15 @@ final class HookEventReceiver: @unchecked Sendable {
         }
     }
 
+    /// Trims and caps an OpenCode subtask description so oversized prompts
+    /// don't bloat payloads or roster rows. Returns nil when empty.
+    static func cappedTaskDescription(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed.prefix(120))
+    }
+
     /// Maps a Claude Code hook event to zero or more `AgentEvent` values.
     /// Must be called on `self.queue`.
     private func mapHookEvent(hookEventName: String, eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
@@ -431,9 +440,14 @@ final class HookEventReceiver: @unchecked Sendable {
             else { return [] }
             let agentType = (eventInput["agent_type"] as? String) ?? "Sub-agent"
             let subName = String(agentType.prefix(20))
+            let taskDescription = Self.cappedTaskDescription(eventInput["description"] as? String)
             let palette = assignPalette(projectDir: projectDir, agentId: sessionID)
-            logger.info("OpenCode subagent: \(sessionID, privacy: .public) name=\(subName, privacy: .public) palette=\(palette)")
-            return [AgentEvent.created(agentId: sessionID, name: subName, palette: palette, parentAgentId: "main")]
+            if let taskDescription {
+                logger.info("OpenCode subagent: \(sessionID, privacy: .public) name=\(subName, privacy: .public) desc=\(taskDescription, privacy: .public) palette=\(palette)")
+            } else {
+                logger.info("OpenCode subagent: \(sessionID, privacy: .public) name=\(subName, privacy: .public) palette=\(palette) (no description)")
+            }
+            return [AgentEvent.created(agentId: sessionID, name: subName, palette: palette, parentAgentId: "main", taskDescription: taskDescription)]
 
         default:
             logger.debug("Unhandled opencode event: \(kind, privacy: .public)")

@@ -49,7 +49,11 @@ struct WorkstreamAgentRosterView: View {
     private var accessibilitySummary: Text {
         var text = Text("\(runs.count)")
         for run in runs {
-            text = text + Text(", ") + Text(run.name)
+            let cap = run.name.first.map { String($0).uppercased() + run.name.dropFirst() } ?? run.name
+            text = text + Text(", ") + Text(cap)
+            if let description = run.taskDescription, !description.isEmpty {
+                text = text + Text(" — ") + Text(description)
+            }
         }
         return text
     }
@@ -88,10 +92,11 @@ private struct RosterCard: View {
             RosterAvatar(name: run.name, palette: run.palette, variant: run.variantIndex, state: run.state)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(run.name)
+                Text(inlineTitle)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
 
                 statusMeta
 
@@ -140,8 +145,23 @@ private struct RosterCard: View {
             .padding(.horizontal, 3)
     }
 
+    private var displayName: String {
+        guard let first = run.name.first else { return run.name }
+        return String(first).uppercased() + run.name.dropFirst()
+    }
+
+    private var inlineTitle: String {
+        if let desc = run.taskDescription, !desc.isEmpty {
+            return "\(displayName) — \(desc)"
+        }
+        return displayName
+    }
+
     private var tooltipText: String {
-        [run.name, run.model].compactMap { $0 }.joined(separator: " · ")
+        var parts = [displayName]
+        if let model = run.model, !model.isEmpty { parts.append(model) }
+        if let description = run.taskDescription, !description.isEmpty { parts.append(description) }
+        return parts.joined(separator: " · ")
     }
 }
 

@@ -3,7 +3,7 @@
 // ABOUTME: current session id for resume, and appends Factory Floor system
 // ABOUTME: instructions from .factoryfloor-state/instructions.md to each turn.
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs"
 
 const PORT_FILE = `${process.env.HOME}/Library/Caches/factoryfloor/hook-port`
 const STATE_DIR = ".factoryfloor-state"
@@ -15,6 +15,8 @@ const INSTRUCTIONS_FILE = `${STATE_DIR}/instructions.md`
 const QUICKACTION_SENTINEL = `${STATE_DIR}/opencode-quickaction`
 // Sentinel files older than this are stale (app crashed mid-run) and ignored.
 const SENTINEL_MAX_AGE_MS = 30 * 60 * 1000
+// Subtask descriptions are capped so oversized prompts don't bloat payloads.
+const DESCRIPTION_MAX_LENGTH = 120
 // How often to re-read the sentinel file from disk.
 const SENTINEL_POLL_MS = 2000
 
@@ -50,8 +52,24 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
 
   // childSessionID -> display name ("build", "plan", "general", custom agents)
   const children = new Map()
+  // Child sessions whose subtask description has already been forwarded; the
+  // subtask part re-fires as it updates, so guard against duplicate posts.
+  const describedChildren = new Set()
+  // Pending descriptions keyed by child session ID, populated from subtask
+  // parts or task-tool calls when currentSession is not yet known.
+  const pendingDescriptions = new Map()
+  // FIFO queue of task-tool descriptions awaiting their child session.
+  const pendingTaskQueue = []
   // Dedup guard for assistant info events: agent_id -> "name|model|contextUsed"
   const lastInfo = new Map()
+
+  const DEBUG_LOG = `${process.env.HOME}/Library/Caches/factoryfloor/plugin-debug.log`
+  function debugLog(msg) {
+    try {
+      const line = `${new Date().toISOString()} [${root}] ${msg}\n`
+      appendFileSync(DEBUG_LOG, line)
+    } catch {}
+  }
 
   let sentinelCache = { value: false, at: 0 }
 
@@ -160,6 +178,19 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
         case "tool.execute.before": {
           const { tool, filePath } = extractToolInfo(properties)
           const sessionID = extractSessionID(properties)
+          // Capture task-tool descriptions for fallback when subtask parts
+          // arrive without a description or before currentSession is known.
+          if (tool === "task") {
+            const rawArgs = properties.args || properties.call?.arguments || properties.input || {}
+            const taskDesc =
+              rawArgs.description || rawArgs.Description || rawArgs.desc || null
+            if (typeof taskDesc === "string" && taskDesc.trim()) {
+              const capped = taskDesc.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+              pendingTaskQueue.push(capped)
+              if (pendingTaskQueue.length > 10) pendingTaskQueue.shift()
+              debugLog(`tool.execute.before(task) queued description: ${capped}`)
+            }
+          }
           await send({
             kind: "tool_start",
             tool,
@@ -214,22 +245,52 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
           const part = properties.part || {}
           if (part.type === "subtask") {
             // Delegation signal: register the child before its first tool call
-            // so the roster shows the real agent name immediately.
+            // so the roster shows the real agent name immediately. The part
+            // also carries the short task description shown in the TUI header
+            // ("Explore Task — Map people/task completion code"); forward it
+            // so the sidebar can render it as a subtitle. Registration is
+            // unconditional: a child whose first event was a tool_start is
+            // stuck with the "Sub-agent" fallback until the real name lands.
             const childID = part.sessionID || null
             const agentName = part.agent || "Sub-agent"
-            if (
-              childID &&
-              currentSession &&
-              childID !== currentSession &&
-              !children.has(childID)
-            ) {
-              registerChild(childID, agentName)
-              await send({
-                kind: "session_created",
-                session_id: childID,
-                parent_session_id: currentSession,
-                agent_type: agentName,
-              })
+            const rawDesc =
+              typeof part.description === "string"
+                ? part.description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+                : ""
+            // If the part's description is empty, try the pending task queue
+            // (task tool calls often precede the subtask part).
+            let description = rawDesc
+            if (!description && pendingTaskQueue.length > 0) {
+              description = pendingTaskQueue[0]
+              debugLog(`subtask part: using pending task description: ${description}`)
+            } else if (description) {
+              debugLog(`subtask part: got description: ${description} agent=${agentName} child=${childID} current=${currentSession}`)
+            } else {
+              debugLog(`subtask part: no description agent=${agentName} child=${childID} hasPending=${pendingTaskQueue.length > 0} partKeys=${Object.keys(part).join(",")}`)
+            }
+            // Always remember the description for the session.created fallback
+            // path, even when we cannot send yet (e.g. currentSession unknown).
+            if (childID && description) pendingDescriptions.set(childID, description)
+            if (childID && currentSession && childID !== currentSession) {
+              const isNew = !children.has(childID)
+              if (isNew || (description && !describedChildren.has(childID))) {
+                registerChild(childID, agentName)
+                if (description) {
+                  describedChildren.add(childID)
+                  // Consume the pending task queue entry we used
+                  if (pendingTaskQueue.length > 0 && pendingTaskQueue[0] === description) pendingTaskQueue.shift()
+                }
+                debugLog(`subtask -> sending session_created child=${childID} agent=${agentName} desc=${description || "(none)"}`)
+                await send({
+                  kind: "session_created",
+                  session_id: childID,
+                  parent_session_id: currentSession,
+                  agent_type: agentName,
+                  ...(description ? { description } : {}),
+                })
+              }
+            } else if (childID) {
+              debugLog(`subtask: deferred (currentSession=${currentSession} child=${childID}) stored pending desc=${description || "(none)"}`)
             }
             break
           }
@@ -294,14 +355,29 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
         case "session.created": {
           const info = properties.info || {}
           const id = info.id || properties.sessionID
+          debugLog(`session.created id=${id} parent=${info.parentID} agent=${info.agent}`)
           if (info.parentID) {
             const isChildSession = info.parentID && id !== info.parentID
             if (isChildSession) registerChild(id, info.agent || "Sub-agent")
+            // Attach any pending description for this child (from subtask
+            // part that arrived earlier, or from a task tool call).
+            let desc = pendingDescriptions.get(id) || null
+            if (!desc && pendingTaskQueue.length > 0) {
+              desc = pendingTaskQueue[0]
+              debugLog(`session.created: using pending task queue desc=${desc}`)
+            }
+            if (desc && !describedChildren.has(id)) {
+              describedChildren.add(id)
+              pendingDescriptions.delete(id)
+              if (pendingTaskQueue.length > 0 && pendingTaskQueue[0] === desc) pendingTaskQueue.shift()
+            }
+            debugLog(`session.created -> sending child=${id} agent=${info.agent} desc=${desc || "(none)"} isChild=${isChildSession}`)
             await send({
               kind: "session_created",
               session_id: isChildSession ? id : null,
               parent_session_id: info.parentID,
               agent_type: info.agent || "Sub-agent",
+              ...(desc ? { description: desc } : {}),
             })
           } else if (id) {
             adoptSession(id)
@@ -344,6 +420,15 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
       const args = output?.args || {}
       const filePath =
         args.filePath || args.file_path || args.path || args.notebook_path || args.notebookPath || null
+      if (input?.tool === "task") {
+        const taskDesc = args.description || args.Description || args.desc || null
+        if (typeof taskDesc === "string" && taskDesc.trim()) {
+          const capped = taskDesc.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+          pendingTaskQueue.push(capped)
+          if (pendingTaskQueue.length > 10) pendingTaskQueue.shift()
+          debugLog(`hook tool.execute.before(task) queued: ${capped}`)
+        }
+      }
       void send({
         kind: "tool_start",
         tool: input?.tool || "unknown",

@@ -24,6 +24,9 @@ struct AgentEvent: Codable, Sendable {
     var contextUsedTokens: Int?
     /// Model-derived context-window ceiling accompanying `contextUsedTokens`.
     var contextLimitTokens: Int?
+    /// Short task description OpenCode attaches to delegated subagents
+    /// (e.g. "Map people/task completion code"), shown as a roster subtitle.
+    var taskDescription: String?
 
     enum EventType: String, Codable, Sendable {
         case agentCreated
@@ -49,12 +52,21 @@ struct AgentEvent: Codable, Sendable {
         case transcriptPath
         case contextUsedTokens
         case contextLimitTokens
+        case taskDescription
     }
 
     // -- Factory methods --
 
-    static func created(agentId: String, name: String, palette: Int, parentAgentId: String? = nil) -> AgentEvent {
-        AgentEvent(type: .agentCreated, agentId: agentId, name: name, palette: palette, parentAgentId: parentAgentId)
+    static func created(
+        agentId: String,
+        name: String,
+        palette: Int,
+        parentAgentId: String? = nil,
+        taskDescription: String? = nil
+    ) -> AgentEvent {
+        var event = AgentEvent(type: .agentCreated, agentId: agentId, name: name, palette: palette, parentAgentId: parentAgentId)
+        event.taskDescription = taskDescription
+        return event
     }
 
     static func removed(agentId: String) -> AgentEvent {

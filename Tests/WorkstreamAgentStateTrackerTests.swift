@@ -350,6 +350,67 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.runs(for: wsID).first?.name, "OpenCode")
     }
 
+    /// OpenCode session_created payloads may carry the subtask description;
+    /// it must land on the run as a separate field, not baked into the name
+    /// (sprite selection keys off the type name).
+    func testOpencodeSubagentCreatedCarriesTaskDescription() {
+        handle(.created(
+            agentId: "sub-1",
+            name: "explore",
+            palette: 1,
+            parentAgentId: "main",
+            taskDescription: "Map people/task completion code"
+        ))
+        let sub = tracker.runs(for: wsID).first(where: { $0.id == "sub-1" })
+        XCTAssertEqual(sub?.name, "explore")
+        XCTAssertEqual(sub?.taskDescription, "Map people/task completion code")
+    }
+
+    /// The plugin re-sends session_created when the subtask part arrives after
+    /// the child was registered without a description; the duplicate must
+    /// refine the existing run instead of recreating or resetting it.
+    func testDuplicateCreatedRefinesNameAndTaskDescription() {
+        handle(.created(agentId: "sub-1", name: "Sub-agent", palette: 3))
+        let originalVariant = tracker.runs(for: wsID).first?.variantIndex
+
+        handle(.created(
+            agentId: "sub-1",
+            name: "explore",
+            palette: 1,
+            parentAgentId: "main",
+            taskDescription: "Map people/task completion code"
+        ))
+
+        let runs = tracker.runs(for: wsID)
+        XCTAssertEqual(runs.count, 1)
+        let sub = runs[0]
+        XCTAssertEqual(sub.name, "explore")
+        XCTAssertEqual(sub.taskDescription, "Map people/task completion code")
+        XCTAssertEqual(sub.palette, 3)
+        XCTAssertEqual(sub.variantIndex, originalVariant)
+
+        // A later create without a description must not wipe the stored one.
+        handle(.created(agentId: "sub-1", name: "explore", palette: 1))
+        XCTAssertEqual(tracker.runs(for: wsID)[0].taskDescription, "Map people/task completion code")
+    }
+
+    /// Claude Code-style creates carry no description; runs stay unaffected.
+    func testClaudeStyleCreateHasNoTaskDescription() {
+        handle(.created(agentId: "sub-1", name: "Explore", palette: 2))
+        XCTAssertNil(tracker.runs(for: wsID).first?.taskDescription)
+    }
+
+    // MARK: - Subtask description capping
+
+    func testCappedTaskDescriptionTrimsAndCaps() {
+        XCTAssertNil(HookEventReceiver.cappedTaskDescription(nil))
+        XCTAssertNil(HookEventReceiver.cappedTaskDescription("   \n  "))
+        XCTAssertEqual(HookEventReceiver.cappedTaskDescription("  Map people/task completion code  "), "Map people/task completion code")
+
+        let long = String(repeating: "a", count: 200)
+        XCTAssertEqual(HookEventReceiver.cappedTaskDescription(long), String(repeating: "a", count: 120))
+    }
+
     /// OpenCode's message.updated can precede any tool/prompt event; the
     /// info-only event must still create the main run so its context
     /// figures land and the row's context bar can appear.
