@@ -241,11 +241,8 @@ final class HookEventReceiver: @unchecked Sendable {
     /// Must be called on `self.queue`.
     private func assignPalette(projectDir: String, agentId: String) -> Int {
         var state = projectState[projectDir] ?? ProjectState()
-        let palette: Int
-        if state.knownAgents.contains(agentId) {
-            palette = state.nextPalette % 6
-        } else {
-            palette = state.nextPalette % 6
+        let palette = state.nextPalette % 6
+        if !state.knownAgents.contains(agentId) {
             state.nextPalette += 1
             state.knownAgents.insert(agentId)
         }

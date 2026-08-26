@@ -49,7 +49,7 @@ struct WorkstreamAgentRosterView: View {
     private var accessibilitySummary: Text {
         var text = Text("\(runs.count)")
         for run in runs {
-            let cap = run.name.first.map { String($0).uppercased() + run.name.dropFirst() } ?? run.name
+            let cap = run.name.capitalizedFirst
             text = text + Text(", ") + Text(cap)
             if let description = run.taskDescription, !description.isEmpty {
                 text = text + Text(" — ") + Text(description)
@@ -146,8 +146,7 @@ private struct RosterCard: View {
     }
 
     private var displayName: String {
-        guard let first = run.name.first else { return run.name }
-        return String(first).uppercased() + run.name.dropFirst()
+        run.name.capitalizedFirst
     }
 
     private var inlineTitle: String {
@@ -162,6 +161,13 @@ private struct RosterCard: View {
         if let model = run.model, !model.isEmpty { parts.append(model) }
         if let description = run.taskDescription, !description.isEmpty { parts.append(description) }
         return parts.joined(separator: " · ")
+    }
+}
+
+private extension String {
+    var capitalizedFirst: String {
+        guard let first else { return self }
+        return String(first).uppercased() + dropFirst()
     }
 }
 

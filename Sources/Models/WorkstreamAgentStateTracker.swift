@@ -240,16 +240,25 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             // attributes instead of recreating it.
             let fallbackName = NSLocalizedString("Sub-agent", comment: "Fallback name for an unnamed subagent")
             let name = event.name ?? fallbackName
-            let isNew = !list.contains(where: { $0.id == event.agentId })
-            upsert(
-                event.agentId,
-                name: name,
-                palette: event.palette ?? 1,
-                isMain: false,
-                variantIndex: isNew ? Self.nextVariantIndex(for: name, in: list) : 0
-            ) { run in
+            if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
+                if !name.isEmpty, name != list[idx].name {
+                    list[idx].name = name
+                }
                 if let description = event.taskDescription, !description.isEmpty {
-                    run.taskDescription = description
+                    list[idx].taskDescription = description
+                }
+                list[idx].lastEventAt = now
+            } else {
+                upsert(
+                    event.agentId,
+                    name: name,
+                    palette: event.palette ?? 1,
+                    isMain: false,
+                    variantIndex: Self.nextVariantIndex(for: name, in: list)
+                ) { run in
+                    if let description = event.taskDescription, !description.isEmpty {
+                        run.taskDescription = description
+                    }
                 }
             }
 

@@ -16,7 +16,9 @@ const QUICKACTION_SENTINEL = `${STATE_DIR}/opencode-quickaction`
 // Sentinel files older than this are stale (app crashed mid-run) and ignored.
 const SENTINEL_MAX_AGE_MS = 30 * 60 * 1000
 // Subtask descriptions are capped so oversized prompts don't bloat payloads.
+// Keep in sync with HookEventReceiver.cappedTaskDescription prefix(120).
 const DESCRIPTION_MAX_LENGTH = 120
+const FALLBACK_AGENT_NAME = "Sub-agent"
 // How often to re-read the sentinel file from disk.
 const SENTINEL_POLL_MS = 2000
 
@@ -117,8 +119,8 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
     if (isChild(sessionID)) {
       const known = children.get(sessionID)
       if (known) return known
-      if (sessionID) children.set(sessionID, "Sub-agent")
-      return "Sub-agent"
+      if (sessionID) children.set(sessionID, FALLBACK_AGENT_NAME)
+      return FALLBACK_AGENT_NAME
     }
     return "OpenCode"
   }
@@ -253,7 +255,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             // unconditional: a child whose first event was a tool_start is
             // stuck with the "Sub-agent" fallback until the real name lands.
             const childID = part.sessionID || null
-            const agentName = part.agent || "Sub-agent"
+            const agentName = part.agent || FALLBACK_AGENT_NAME
             const rawDesc = cappedDescription(part.description)
             // If the part's description is empty, try the pending task queue
             // (task tool calls often precede the subtask part).
@@ -347,7 +349,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
           const id = info.id || properties.sessionID
           if (info.parentID) {
             const isChildSession = info.parentID && id !== info.parentID
-            if (isChildSession) registerChild(id, info.agent || "Sub-agent")
+            if (isChildSession) registerChild(id, info.agent || FALLBACK_AGENT_NAME)
             // Attach any pending description for this child (from subtask
             // part that arrived earlier, or from a task tool call).
             let desc = pendingDescriptions.get(id) || null
@@ -363,7 +365,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
               kind: "session_created",
               session_id: isChildSession ? id : null,
               parent_session_id: info.parentID,
-              agent_type: info.agent || "Sub-agent",
+              agent_type: info.agent || FALLBACK_AGENT_NAME,
               ...(desc ? { description: desc } : {}),
             })
           } else if (id) {
