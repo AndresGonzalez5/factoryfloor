@@ -80,6 +80,7 @@
 "Workstream name" = "Namn på arbetsflöde";
 "Leave blank for a random name." = "Lämna tomt för att få ett slumpmässigt namn.";
 "This becomes the branch and worktree name." = "Namnet blir grenen och arbetsträdets namn.";
+"Leave blank for a random name. This becomes the branch and worktree name." = "Lämna tomt för att få ett slumpmässigt namn. Namnet blir grenen och arbetsträdets namn.";
 "That name isn't valid for a git branch." = "Namnet är inte giltigt som git-gren.";
 "A workstream with this name already exists." = "Ett arbetsflöde med detta namn finns redan.";
 

@@ -1400,10 +1400,13 @@ private struct NewWorkstreamSheet: View {
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundStyle(.secondary)
-                TextField("Workstream name", text: $name)
+                TextField("", text: $name, prompt: Text(placeholder).font(.system(.body, design: .monospaced)).foregroundStyle(.tertiary))
                     .textFieldStyle(.roundedBorder)
                     .focused($isFocused)
                     .onSubmit { onAdd() }
+                Text("Leave blank for a random name. This becomes the branch and worktree name.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1413,19 +1416,6 @@ private struct NewWorkstreamSheet: View {
                     .fontWeight(.medium)
                     .foregroundStyle(.secondary)
                 HarnessPicker(selection: $harness)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Leave blank for a random name.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(placeholder)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                Text("This becomes the branch and worktree name.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
