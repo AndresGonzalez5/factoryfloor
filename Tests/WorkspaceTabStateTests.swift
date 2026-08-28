@@ -266,14 +266,18 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
 
         let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
 
-        XCTAssertTrue(state.tabs.contains(.changes))
+        // Agent is restored in its canonical slot after Info, not ahead of it,
+        // so Cmd+1/Cmd+2 still address the tabs they are documented to address.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
         XCTAssertEqual(state.tabs.filter { $0 == .changes }.count, 1)
         XCTAssertEqual(state.activeTab, .info)
     }
 
-    func testStartupStateMigrationStillFiltersEnvironmentTabs() {
-        // The pre-merge environment-tab filtering must remain: a persisted snapshot
-        // that contained an editor tab (not restorable) is dropped, and .changes is added.
+    func testStartupStateKeepsEditorTabs() {
+        // startupWorkspaceTabState runs on every workstream switch. It used to filter
+        // tabs against an allowlist that omitted .editor, so switching away from a
+        // workstream and back silently closed open editors — the opposite of
+        // reconciled(liveSurfaceIDs:), which keeps editor tabs on purpose.
         let editorID = UUID()
         let snapshot = WorkspaceTabSnapshot(
             tabs: [.info, .agent, .editor(editorID)],
@@ -290,9 +294,33 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
 
         let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
 
-        // Editor tab filtered out; .changes inserted after .agent; active falls back to .info.
-        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
-        XCTAssertEqual(state.activeTab, .info)
+        // Editor tab survives, .changes still lands after .agent, and the editor
+        // stays selected because it is still present.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .editor(editorID)])
+        XCTAssertEqual(state.activeTab, .editor(editorID))
+    }
+
+    func testStartupStateRestoresMissingFixedTabs() {
+        // A snapshot missing Info (or Agent) must regain it rather than render a
+        // workspace with no way back to the permanent tabs.
+        let browserID = UUID()
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.changes, .browser(browserID)],
+            terminalCount: 0,
+            browserCount: 1,
+            editorCount: 0,
+            activeTab: .browser(browserID),
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+
+        let state = startupWorkspaceTabState(snapshot: snapshot, savedTab: nil)
+
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .browser(browserID)])
+        XCTAssertEqual(state.activeTab, .browser(browserID))
     }
 
     func testWorkspaceEnvironmentUsesSuppliedDefaultBranch() throws {

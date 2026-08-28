@@ -180,31 +180,39 @@ struct WorkspaceTabSnapshot {
     }
 }
 
+/// Normalizes a restored snapshot without discarding tabs. The previous version
+/// filtered against an allowlist that omitted `.editor`, so every workstream
+/// switch silently closed open editor tabs — contradicting
+/// `reconciled(liveSurfaceIDs:)`, which keeps them on purpose. Info and Agent are
+/// guaranteed present, duplicates collapse, and the active tab is reset only when
+/// it is genuinely absent.
+private func sanitizedWorkspaceTabSnapshot(_ snapshot: WorkspaceTabSnapshot) -> WorkspaceTabSnapshot {
+    var cleaned = snapshot
+    // The permanent tabs always lead, in their canonical Cmd+1/Cmd+2 order;
+    // every other tab keeps the order the snapshot captured. Restoring them by
+    // prepending only the missing one would seat Agent ahead of Info.
+    var tabs: [WorkspaceTab] = [.info, .agent]
+    for tab in snapshot.tabs where !tabs.contains(tab) {
+        tabs.append(tab)
+    }
+    cleaned.tabs = tabs
+    // Migrate older snapshots that predate the fixed Changes tab: insert it
+    // immediately after Agent (or at a sensible fixed index if Agent is
+    // absent). Idempotent — never inserts when .changes is already present.
+    if !cleaned.tabs.contains(.changes) {
+        let insertIndex = cleaned.tabs.firstIndex(of: .agent).map { $0 + 1 }
+            ?? min(2, cleaned.tabs.count)
+        cleaned.tabs.insert(.changes, at: insertIndex)
+    }
+    if !cleaned.tabs.contains(cleaned.activeTab) {
+        cleaned.activeTab = .info
+    }
+    return cleaned
+}
+
 func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
     if let snapshot {
-        // Filter out any persisted environment tabs from before the merge.
-        let filteredTabs = snapshot.tabs.filter { tab in
-            if case .info = tab { return true }
-            if case .agent = tab { return true }
-            if case .changes = tab { return true }
-            if case .terminal = tab { return true }
-            if case .browser = tab { return true }
-            return false
-        }
-        var cleaned = snapshot
-        cleaned.tabs = filteredTabs
-        // Migrate older snapshots that predate the fixed Changes tab: insert it
-        // immediately after Agent (or at a sensible fixed index if Agent is
-        // absent). Idempotent — never inserts when .changes is already present.
-        if !cleaned.tabs.contains(.changes) {
-            let insertIndex = cleaned.tabs.firstIndex(of: .agent).map { $0 + 1 }
-                ?? min(2, cleaned.tabs.count)
-            cleaned.tabs.insert(.changes, at: insertIndex)
-        }
-        if !cleaned.tabs.contains(cleaned.activeTab) {
-            cleaned.activeTab = .info
-        }
-        return cleaned
+        return sanitizedWorkspaceTabSnapshot(snapshot)
     }
 
     let tabs: [WorkspaceTab] = [.info, .agent, .changes]
