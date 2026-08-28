@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Log build environment
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Install Zig
+        uses: ./.github/actions/install-zig
+        with:
+          version: 0.15.2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Cache SPM packages
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/factoryfloor/spm
+          key: spm-ci-${{ hashFiles('project.yml') }}
+          restore-keys: spm-ci-
+
+      # Keyed on the submodule's checked-out commit. Do not switch this to
+      # hashFiles('ghostty/.git') — for a submodule that path is a pointer file
+      # whose contents never change when the pinned commit moves.
+      - name: Compute Ghostty cache key
+        id: ghostty-key
+        run: echo "key=ghostty-ci-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-macos15" >> "$GITHUB_OUTPUT"
+
+      # Deliberately a different key namespace from release.yml: CI builds a
+      # host-arch-only xcframework, and a release must never restore it.
+      - name: Cache Ghostty xcframework
+        id: ghostty-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ghostty/macos/GhosttyKit.xcframework
+            ghostty/zig-out
+          key: ${{ steps.ghostty-key.outputs.key }}
+
+      - name: Build Ghostty xcframework
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        run: |
+          cd ghostty
+          zig build -Demit-xcframework=true -Demit-macos-app=false -Doptimize=ReleaseFast
+
+      - name: Verify Ghostty artifacts
+        run: |
+          test -d ghostty/macos/GhosttyKit.xcframework
+          test -d ghostty/zig-out/share/terminfo
+          test -d ghostty/zig-out/share/ghostty
+
+      # dev.sh runs xcodegen and builds the Monaco bundle itself.
+      - name: Build
+        run: ./scripts/dev.sh build
+
+      - name: Test
+        run: ./scripts/dev.sh test
