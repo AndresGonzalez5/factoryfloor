@@ -134,6 +134,7 @@ final class TerminalView: NSView {
         }
 
         Self.surfaceRegistry[surface] = self
+        logger.info("created surface cmd=\(SurfaceEventLogger.preview(command))")
         updateTrackingAreas()
     }
 
@@ -146,6 +147,8 @@ final class TerminalView: NSView {
     /// Call this before removing from the cache to ensure the process is killed immediately.
     func destroy() {
         guard let surface else { return }
+        let wsID = self.workstreamID
+        logger.info("destroy surface workstream=\(String(describing: wsID)) — freeing Ghostty surface (kills child process)")
         Self.surfaceRegistry.removeValue(forKey: surface)
         ghostty_surface_free(surface)
         self.surface = nil
@@ -153,6 +156,8 @@ final class TerminalView: NSView {
 
     deinit {
         if let surface {
+            let wsID = self.workstreamID
+            logger.info("deinit with live surface workstream=\(String(describing: wsID)) — freeing Ghostty surface")
             ghostty_surface_free(surface)
         }
     }
@@ -181,6 +186,9 @@ final class TerminalView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        let wsID = self.workstreamID
+        let attached = self.window != nil
+        logger.detailed("viewDidMoveToWindow workstream=\(String(describing: wsID)) window=\(attached ? "attached" : "detached")")
         guard let surface else { return }
 
         if let screen = window?.screen {
@@ -262,6 +270,8 @@ final class TerminalView: NSView {
 
     func setVisible(_ visible: Bool) {
         guard let surface else { return }
+        let wsID = self.workstreamID
+        logger.detailed("setVisible workstream=\(String(describing: wsID)) visible=\(visible)")
         ghostty_surface_set_occlusion(surface, visible)
     }
 
@@ -270,6 +280,8 @@ final class TerminalView: NSView {
     /// conversion, matching Ghostty's own `sizeDidChange()` implementation.
     func notifySizeChanged(_ size: CGSize) {
         guard size != contentSize else { return }
+        let wsID = self.workstreamID
+        logger.detailed("notifySizeChanged workstream=\(String(describing: wsID)) size=\(Int(size.width))x\(Int(size.height))")
         contentSize = size
         reportSizeToSurface(size)
     }

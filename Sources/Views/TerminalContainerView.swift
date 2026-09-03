@@ -1572,6 +1572,8 @@ struct TerminalContainerView: View {
         }
         appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
         rebuildAgentCommand()
+        logger.info("startWorkspace \(workstreamID) harness=\(harness.rawValue, privacy: .public) liveAgent=\(surfaceCache.hasSurface(for: claudeID), privacy: .public)")
+        SurfaceEventLogger.logDetailed(workstreamID: workstreamID, "workspace-enter harness=\(harness.rawValue) liveAgent=\(surfaceCache.hasSurface(for: claudeID)) trackedOpencodeSession=\(trackedOpencodeSessionID ?? "none") cmd=\(SurfaceEventLogger.preview(cachedAgentCommand))")
         scriptsApproved = ScriptTrust.isApproved(scriptConfig, for: projectDirectory)
         setupGateState = SetupGateState.resolve(
             hasSetupScript: scriptConfig.setup != nil,
@@ -1610,14 +1612,17 @@ struct TerminalContainerView: View {
                 )
             }
         } else {
-            // Agent surface
+            // Agent surface: attach non-destructively. A live agent must
+            // survive passive workspace re-entry even when the rebuilt
+            // command drifted (opencode session file, tool detection, rename).
             if let cmd = cachedAgentCommand {
-                _ = surfaceCache.ensureSurface(
+                _ = surfaceCache.attachAgentSurface(
                     for: claudeID,
                     app: app,
                     workingDirectory: workingDirectory,
                     command: cmd,
-                    environmentVars: envVars
+                    environmentVars: envVars,
+                    reason: "workspace-preload"
                 )
             }
         }
@@ -2504,9 +2509,16 @@ final class TerminalSurfaceCache: ObservableObject {
         }
     }
 
+    /// Whether a live surface exists for `id` (without creating one).
+    func hasSurface(for id: UUID) -> Bool {
+        surfaces[id] != nil
+    }
+
     func surface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String? = nil, initialInput: String? = nil, environmentVars: [String: String] = [:], waitAfterCommand: Bool = true) -> TerminalView {
         if let existing = surfaces[id] {
             existing.workstreamID = id
+            logger.detailed("Reusing surface \(id) cmd=\(SurfaceEventLogger.preview(command))")
+            SurfaceEventLogger.logDetailed(workstreamID: id, "surface-reused cmd=\(SurfaceEventLogger.preview(command))")
             return existing
         }
         let view = TerminalView(app: app, workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars, waitAfterCommand: waitAfterCommand)
@@ -2515,17 +2527,56 @@ final class TerminalSurfaceCache: ObservableObject {
         surfaceParams[id] = SurfaceParams(workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars, waitAfterCommand: waitAfterCommand)
         if view.surface == nil {
             logger.error("Surface creation failed for \(id) command=\(command ?? "<shell>")")
+            SurfaceEventLogger.logInfo(workstreamID: id, "surface-creation-failed cmd=\(SurfaceEventLogger.preview(command))")
             failedSurfaces[id] = command ?? "(default shell)"
             objectWillChange.send()
         } else {
             creationTimes[id] = Date()
+            logger.info("Created surface \(id) cmd=\(SurfaceEventLogger.preview(command), privacy: .public)")
+            SurfaceEventLogger.logInfo(workstreamID: id, "surface-created cmd=\(SurfaceEventLogger.preview(command)) workdir=\(workingDirectory)")
         }
         return view
     }
 
-    /// Creates the surface for `id`, replacing any existing surface whose
-    /// stored command differs (e.g., after a harness switch). A matching
-    /// surface is returned untouched.
+    /// Non-destructive attach for the agent surface on passive workspace entry.
+    /// A live surface is NEVER killed here: when the rebuilt command drifted
+    /// (e.g. opencode wrote a new session id while the agent was running),
+    /// the live process is kept and the stored params are updated so a future
+    /// genuine respawn uses the latest command. Returns the live or new view.
+    func attachAgentSurface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String?, initialInput: String? = nil, environmentVars: [String: String] = [:], waitAfterCommand: Bool = true, reason: String = "preload") -> TerminalView {
+        if let existing = surfaces[id] {
+            existing.workstreamID = id
+            let params = surfaceParams[id]
+            let cmdChanged = params?.command != command
+            let dirChanged = params?.workingDirectory != workingDirectory
+            if cmdChanged || dirChanged {
+                logger.info("Keeping live agent surface \(id) — command drifted (\(reason, privacy: .public)); NOT replacing old=\(SurfaceEventLogger.preview(params?.command), privacy: .public) new=\(SurfaceEventLogger.preview(command), privacy: .public)")
+                SurfaceEventLogger.logInfo(workstreamID: id, "surface-kept-alive reason=\(reason) dirChanged=\(dirChanged) old=\(SurfaceEventLogger.preview(params?.command)) new=\(SurfaceEventLogger.preview(command))")
+                // Refresh stored params so a future genuine respawn (after a
+                // real exit) uses the latest command instead of a stale one.
+                surfaceParams[id] = SurfaceParams(workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars, waitAfterCommand: waitAfterCommand)
+            } else {
+                logger.detailed("Reusing agent surface \(id) (\(reason))")
+                SurfaceEventLogger.logDetailed(workstreamID: id, "surface-reused reason=\(reason) cmd=\(SurfaceEventLogger.preview(command))")
+            }
+            return existing
+        }
+        return surface(
+            for: id,
+            app: app,
+            workingDirectory: workingDirectory,
+            command: command,
+            initialInput: initialInput,
+            environmentVars: environmentVars,
+            waitAfterCommand: waitAfterCommand
+        )
+    }
+
+    /// Explicit replacement: kills the live surface when the stored command
+    /// differs. Only use for explicit user actions (e.g. an agent restart
+    /// button). Passive workspace re-entry MUST use `attachAgentSurface`
+    /// instead, which keeps a live agent running across command drift
+    /// (opencode session-id file, tool detection, renames).
     func ensureSurface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String?, initialInput: String? = nil, environmentVars: [String: String] = [:], waitAfterCommand: Bool = true) -> TerminalView {
         if let existing = surfaces[id],
            let params = surfaceParams[id],
@@ -2534,8 +2585,10 @@ final class TerminalSurfaceCache: ObservableObject {
         {
             return existing
         }
-        if let stale = surfaces[id] {
-            logger.info("Replacing surface \(id) — command changed")
+        if surfaces[id] != nil {
+            let old = surfaceParams[id]?.command
+            logger.info("Replacing surface \(id) — command changed old=\(SurfaceEventLogger.preview(old), privacy: .public) new=\(SurfaceEventLogger.preview(command), privacy: .public)")
+            SurfaceEventLogger.logInfo(workstreamID: id, "surface-replaced old=\(SurfaceEventLogger.preview(old)) new=\(SurfaceEventLogger.preview(command))")
             respawnableIDs.remove(id)
             removeSurface(for: id)
         }
@@ -2593,6 +2646,8 @@ final class TerminalSurfaceCache: ObservableObject {
 
     func removeSurface(for id: UUID) {
         if let view = surfaces.removeValue(forKey: id) {
+            logger.info("Removing surface \(id) — destroying Ghostty surface (kills child process)")
+            SurfaceEventLogger.logInfo(workstreamID: id, "surface-removed")
             view.destroy()
         }
         surfaceParams.removeValue(forKey: id)
@@ -2625,13 +2680,16 @@ final class TerminalSurfaceCache: ObservableObject {
 
         // Check if the surface died immediately after creation (launch failure).
         let diedImmediately: Bool
+        let age: TimeInterval?
         if let created = creationTimes[id] {
-            let age = Date().timeIntervalSince(created)
-            diedImmediately = age < Self.healthCheckWindow
+            age = Date().timeIntervalSince(created)
+            diedImmediately = age! < Self.healthCheckWindow
             if diedImmediately {
-                logger.error("Surface \(id) died after \(String(format: "%.1f", age))s, treating as launch failure")
+                logger.error("Surface \(id) died after \(String(format: "%.1f", age!))s, treating as launch failure")
+                SurfaceEventLogger.logInfo(workstreamID: id, "surface-closed age=\(String(format: "%.1f", age!))s decision=launch-failure")
             }
         } else {
+            age = nil
             diedImmediately = false
         }
 
@@ -2659,10 +2717,12 @@ final class TerminalSurfaceCache: ObservableObject {
             respawning.remove(id)
             if newView.surface == nil {
                 logger.error("Respawn failed for surface \(id)")
+                SurfaceEventLogger.logInfo(workstreamID: id, "surface-respawn-failed")
                 failedSurfaces[id] = params.command ?? "(default shell)"
             } else {
                 creationTimes[id] = Date()
                 logger.detailed("Respawned surface \(id)")
+                SurfaceEventLogger.logInfo(workstreamID: id, "surface-respawned age=\(age.map { String(format: "%.1f", $0) } ?? "?")s cmd=\(SurfaceEventLogger.preview(params.command))")
             }
             objectWillChange.send()
         } else if diedImmediately {
@@ -2671,6 +2731,8 @@ final class TerminalSurfaceCache: ObservableObject {
             failedSurfaces[id] = command
             objectWillChange.send()
         } else {
+            logger.info("Surface \(id) closed by child exit (age=\(age.map { String(format: "%.1f", $0) } ?? "?")s) — removing")
+            SurfaceEventLogger.logInfo(workstreamID: id, "surface-closed age=\(age.map { String(format: "%.1f", $0) } ?? "?")s decision=remove-tab")
             removeSurface(for: id)
             NotificationCenter.default.post(name: .terminalTabExited, object: id)
         }
