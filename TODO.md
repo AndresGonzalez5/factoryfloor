@@ -19,6 +19,7 @@
 
 ## Future
 
+- [ ] Changes tab: split `setFiles` transport into shells-first + chunked bodies (JS lazy-mount already chunks rendering; the single-JSON bridge remains the largest main-thread cost on huge worktrees)
 - [ ] Agent roster avatars for more agent types: drop 64x64 `avatar_<type>_<k>.png` files in `Resources/AgentSprites/` (claude/plan have 1 sprite each; explore/generalpurpose have 4 each — sets cycle automatically; see docs/agent-roster.md)
 - [ ] External Chrome integration: launch with --remote-debugging-port for WebMCP/CDP
 - [ ] PR management: create and manage PRs from workstreams (currently view-only)

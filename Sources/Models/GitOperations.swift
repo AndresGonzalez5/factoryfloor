@@ -75,8 +75,8 @@ struct WorktreeDetail {
 /// "binary file" placeholder and `changedLines`/`sizeHint` to apply the
 /// per-file large-file guard (defer rendering files over a threshold) before
 /// reading any content.
-struct DiffFile: Equatable {
-    enum Status: String {
+struct DiffFile: Equatable, Sendable {
+    enum Status: String, Sendable {
         case added = "A"
         case modified = "M"
         case deleted = "D"
@@ -86,6 +86,9 @@ struct DiffFile: Equatable {
     /// Path relative to the worktree root. For renames, the new path.
     let relativePath: String
     let status: Status
+    /// For renames, the pre-rename path at the base ref. Used to resolve the
+    /// original-side content (`git show <base>:<oldPath>`). nil otherwise.
+    var oldPath: String? = nil
 
     /// True when git reports the file as binary (numstat "-"/"-") or, for
     /// untracked files, when a NUL byte is found in the first chunk on disk.
@@ -163,7 +166,15 @@ enum GitOperations {
     }
 
     /// Detect the default branch. Prefers `development`, then falls back to auto-detection.
+    /// Cached for `refCacheTTL` (see `cachedDefaultBranch(at:)`); callers that
+    /// need a guaranteed-fresh answer should use `defaultBranchUncached(at:)`.
     static func defaultBranch(at path: String) -> String {
+        cachedDefaultBranch(at: path)
+    }
+
+    /// Uncached default-branch detection. Prefers `development`, then falls
+    /// back to auto-detection.
+    static func defaultBranchUncached(at path: String) -> String {
         // Prefer development branch if it exists (remote then local)
         for branch in ["origin/development", "development"] {
             if run(args: ["rev-parse", "--verify", branch], in: path) != nil {
@@ -195,24 +206,86 @@ enum GitOperations {
     /// untracked file is binary (numstat does not cover untracked files).
     private static let binarySniffBytes = 8 * 1024
 
+    // MARK: Ref-resolution cache
+
+    /// Short-lived caches so the Changes tab's fingerprint + listing + content
+    /// passes share one `defaultBranch`/`merge-base` resolution instead of
+    /// re-spawning ~6 git processes per pass. TTL-guarded; entries are keyed
+    /// by directory and safe to use from background queues via `cacheLock`.
+    private static let cacheLock = NSLock()
+    /// Manually synchronized via `cacheLock` on every access (get + set under
+    /// the lock, TTL-checked while held); `nonisolated(unsafe)` records that
+    /// contract for Swift 6.
+    nonisolated(unsafe) private static var defaultBranchCache: [String: (value: String, date: Date)] = [:]
+    nonisolated(unsafe) private static var mergeBaseCache: [String: (value: String?, date: Date)] = [:]
+    private static let refCacheTTL: TimeInterval = 30
+
+    /// Drop cached default-branch/merge-base resolutions (e.g. on manual refresh).
+    static func invalidateRefCaches() {
+        cacheLock.lock()
+        defaultBranchCache.removeAll()
+        mergeBaseCache.removeAll()
+        cacheLock.unlock()
+    }
+
+    /// Cached wrapper around `defaultBranchUncached(at:)`.
+    static func cachedDefaultBranch(at path: String) -> String {
+        cacheLock.lock()
+        if let entry = defaultBranchCache[path], Date().timeIntervalSince(entry.date) < refCacheTTL {
+            let value = entry.value
+            cacheLock.unlock()
+            return value
+        }
+        cacheLock.unlock()
+        let value = defaultBranchUncached(at: path)
+        cacheLock.lock()
+        defaultBranchCache[path] = (value, Date())
+        cacheLock.unlock()
+        return value
+    }
+
+    /// Cached merge-base of the default branch and HEAD. nil when merge-base
+    /// cannot be computed (e.g. non-repo, unborn HEAD, git failure).
+    static func cachedMergeBase(worktreePath: String, projectPath: String) -> String? {
+        let key = "\(worktreePath)\0\(projectPath)"
+        cacheLock.lock()
+        if let entry = mergeBaseCache[key], Date().timeIntervalSince(entry.date) < refCacheTTL {
+            let value = entry.value
+            cacheLock.unlock()
+            return value
+        }
+        cacheLock.unlock()
+        let base = cachedDefaultBranch(at: projectPath)
+        let value = run(args: ["merge-base", base, "HEAD"], in: worktreePath)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        cacheLock.lock()
+        mergeBaseCache[key] = (value, Date())
+        cacheLock.unlock()
+        return value
+    }
+
     /// List files changed between `merge-base(defaultBranch, HEAD)` and the
     /// working tree (Branch mode), unioning untracked files in as `.added`
     /// (Hardening 1). Each file carries `isBinary`/`changedLines`/`sizeHint`.
-    /// Returns an empty array on any git failure or non-repo path.
+    /// Falls back to the uncommitted listing when no merge-base exists (e.g.
+    /// unborn HEAD) so untracked files still show. Empty on non-repo paths.
     static func branchDiffFiles(worktreePath: String, projectPath: String) -> [DiffFile] {
-        guard let base = mergeBase(worktreePath: worktreePath, projectPath: projectPath) else {
-            return []
+        guard let base = cachedMergeBase(worktreePath: worktreePath, projectPath: projectPath) else {
+            // No merge-base (unborn HEAD, shallow/broken ref): degrade to the
+            // uncommitted listing rather than reporting "No changes".
+            return uncommittedDiffFiles(at: worktreePath)
         }
-        guard let output = run(
-            args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", base],
+        guard let data = runData(
+            args: ["diff", "--name-status", "-z", "--diff-filter=AMDR", "-M", base],
             in: worktreePath
         ) else {
             return []
         }
-        var files = parseNameStatus(output)
+        var files = parseNameStatusZ(data)
         appendUntrackedFiles(into: &files, at: worktreePath)
 
-        let stats = numstat(args: ["diff", "--numstat", "-M", base], in: worktreePath)
+        let stats = numstatZ(args: ["diff", "--numstat", "-z", "-M", base], in: worktreePath)
         annotate(&files, with: stats, at: worktreePath)
         return files.sorted { $0.relativePath < $1.relativePath }
     }
@@ -220,17 +293,24 @@ enum GitOperations {
     /// List files that differ between HEAD and the working tree (Uncommitted
     /// mode), unioning untracked files in as `.added` (Hardening 1). Each file
     /// carries `isBinary`/`changedLines`/`sizeHint`. Empty on git failure.
+    /// With an unborn HEAD (fresh repo, no commits yet) `git diff HEAD` cannot
+    /// run — the untracked files are still listed as `.added` so the tab shows
+    /// reviewable content instead of "No changes".
     static func uncommittedDiffFiles(at path: String) -> [DiffFile] {
-        guard let output = run(
-            args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", "HEAD"],
+        guard let data = runData(
+            args: ["diff", "--name-status", "-z", "--diff-filter=AMDR", "-M", "HEAD"],
             in: path
         ) else {
-            return []
+            guard run(args: ["rev-parse", "--verify", "HEAD"], in: path) == nil else { return [] }
+            var untracked: [DiffFile] = []
+            appendUntrackedFiles(into: &untracked, at: path)
+            annotate(&untracked, with: [:], at: path)
+            return untracked.sorted { $0.relativePath < $1.relativePath }
         }
-        var files = parseNameStatus(output)
+        var files = parseNameStatusZ(data)
         appendUntrackedFiles(into: &files, at: path)
 
-        let stats = numstat(args: ["diff", "--numstat", "-M", "HEAD"], in: path)
+        let stats = numstatZ(args: ["diff", "--numstat", "-z", "-M", "HEAD"], in: path)
         annotate(&files, with: stats, at: path)
         return files.sorted { $0.relativePath < $1.relativePath }
     }
@@ -238,21 +318,41 @@ enum GitOperations {
     /// Return the content of a file at a given git ref via `git show <ref>:<path>`.
     /// Returns nil if the file does not exist at that ref or git fails.
     /// `run()` drains stdout before waiting, so large files do not deadlock.
+    /// Prefer `batchFileContents(at:ref:paths:)` when fetching several files.
     static func fileContent(at path: String, ref: String, filePath: String) -> String? {
         run(args: ["show", "\(ref):\(filePath)"], in: path)
+    }
+
+    /// Fetch the base-ref contents of many files with a SINGLE git process via
+    /// `git cat-file --batch`. Keys are the requested paths; missing blobs map
+    /// to `""`. Paths containing a newline fall back to per-file `git show`
+    /// (the batch protocol is newline-delimited). Bytes decode lossy as UTF-8
+    /// so non-UTF8 files show content instead of an empty diff.
+    static func batchFileContents(at path: String, ref: String, paths: [String]) -> [String: String] {
+        let tricky = paths.filter { $0.contains("\n") }
+        let batchPaths = paths.filter { !$0.contains("\n") }
+        var result: [String: String] = [:]
+        result.reserveCapacity(paths.count)
+        if !batchPaths.isEmpty {
+            for (queried, content) in runCatFileBatch(in: path, ref: ref, paths: batchPaths) {
+                result[queried] = content
+            }
+        }
+        for trickyPath in tricky {
+            // Newline in path breaks the batch framing; rare enough for one spawn.
+            result[trickyPath] = fileContent(at: path, ref: ref, filePath: trickyPath) ?? ""
+        }
+        // Every requested path gets a key, even if the blob was missing.
+        for queried in paths where result[queried] == nil {
+            result[queried] = ""
+        }
+        return result
     }
 
     /// The merge-base commit of the default branch and HEAD, trimmed. nil when
     /// merge-base cannot be computed (e.g. non-repo, unborn HEAD, git failure).
     static func mergeBase(worktreePath: String, projectPath: String) -> String? {
-        let base = defaultBranch(at: projectPath)
-        guard let sha = run(args: ["merge-base", base, "HEAD"], in: worktreePath)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !sha.isEmpty
-        else {
-            return nil
-        }
-        return sha
+        cachedMergeBase(worktreePath: worktreePath, projectPath: projectPath)
     }
 
     // MARK: - Diff fingerprint (cache invalidation)
@@ -269,56 +369,121 @@ enum GitOperations {
         let head = run(args: ["rev-parse", "HEAD"], in: worktreePath)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
+        // The merge-base resolution is cache-shared with the listing pass, so
+        // this stays cheap on repeat visits within the TTL window.
         let tracked: String
         if mode == "branch" {
-            let base = mergeBase(worktreePath: worktreePath, projectPath: projectPath) ?? "HEAD"
+            let base = cachedMergeBase(worktreePath: worktreePath, projectPath: projectPath) ?? "HEAD"
             tracked = run(args: ["diff", "--stat", base], in: worktreePath) ?? ""
         } else {
             tracked = run(args: ["diff", "--stat", "HEAD"], in: worktreePath) ?? ""
         }
-        let untracked = run(args: ["ls-files", "--others", "--exclude-standard"], in: worktreePath) ?? ""
-        let stat = tracked + untracked
+        let untracked = run(args: ["ls-files", "--others", "--exclude-standard", "-z"], in: worktreePath) ?? ""
+        let stat = tracked + "\0" + untracked
 
-        // Not cryptographic — just enough to detect changes between tab visits.
-        return "\(head)|\(stat.count)|\(stat.hashValue)"
+        // Stable FNV-1a hash (String.hashValue is process-random and must not
+        // be persisted or compared across launches).
+        return "\(head)|\(mode)|\(stableHash(stat))"
+    }
+
+    /// 64-bit FNV-1a over the UTF-8 bytes, hex-encoded. Not cryptographic —
+    /// just enough to detect changes between tab visits, stably.
+    static func stableHash(_ string: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in string.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
     }
 
     // MARK: - Diff listing helpers
 
     /// Parse `git diff --name-status` output into DiffFiles.
     /// Each line is `<STATUS>\t<path>` or, for renames, `R###\t<old>\t<new>`.
-    private static func parseNameStatus(_ output: String) -> [DiffFile] {
+    /// Kept for compatibility; new code paths use the nul-separated
+    /// `parseNameStatusZ(_:)` which handles special filenames exactly.
+    static func parseNameStatus(_ output: String) -> [DiffFile] {
+        parseNameStatusTokens(output.split(separator: "\n", omittingEmptySubsequences: true).flatMap {
+            $0.split(separator: "\t", omittingEmptySubsequences: true).map(String.init)
+        })
+    }
+
+    /// Parse nul-separated `git diff --name-status -z` output into DiffFiles.
+    /// With `-z` git emits NUL-terminated records with no quoting, so paths
+    /// containing spaces, quotes, unicode, or even newlines survive exactly.
+    /// Normal records are `<STATUS> NUL <path> NUL`; renames are
+    /// `<Rscore> NUL <old> NUL <new> NUL`. The token parser also tolerates
+    /// TAB-separated (non-`-z`) records, so mixed framing still parses.
+    static func parseNameStatusZ(_ data: Data) -> [DiffFile] {
+        // Non-nul output (e.g. plain-text fixtures in tests): legacy parse.
+        guard data.contains(0) else {
+            guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return [] }
+            return parseNameStatus(text)
+        }
+        // Split on NUL first (record framing), then on TAB (field framing).
+        var tokens: [String] = []
+        tokens.reserveCapacity(64)
+        for record in data.split(separator: 0, omittingEmptySubsequences: true) {
+            for field in record.split(separator: UInt8(ascii: "\t"), omittingEmptySubsequences: true) {
+                tokens.append(String(decoding: field, as: UTF8.self))
+            }
+        }
+        return parseNameStatusTokens(tokens)
+    }
+
+    /// Shared token machine for name-status records. A status token is a lone
+    /// `A`/`M`/`D`/`R…` (renames carry a similarity score, e.g. `R100`);
+    /// normal statuses consume one path token, renames consume two
+    /// (old, new) and keep the new path as `relativePath` plus `oldPath`.
+    static func parseNameStatusTokens(_ tokens: [String]) -> [DiffFile] {
         var files: [DiffFile] = []
-        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
-            let fields = rawLine.split(separator: "\t", omittingEmptySubsequences: true)
-            guard let statusField = fields.first else { continue }
-            let statusChar = statusField.prefix(1)
-            switch statusChar {
-            case "A":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .added)) }
-            case "M":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .modified)) }
-            case "D":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .deleted)) }
-            case "R":
-                // Rename: use the new path (last field).
-                if fields.count >= 3 { files.append(DiffFile(relativePath: String(fields[2]), status: .renamed)) }
-            default:
+        var index = tokens.startIndex
+        while index < tokens.endIndex {
+            let token = tokens[index]
+            guard isNameStatusToken(token) else {
+                index = tokens.index(after: index)
                 continue
+            }
+            let kind = token.first!
+            if kind == "R" {
+                guard tokens.index(index, offsetBy: 2) < tokens.endIndex else { break }
+                let oldPath = tokens[tokens.index(after: index)]
+                let newPath = tokens[tokens.index(index, offsetBy: 2)]
+                var file = DiffFile(relativePath: newPath, status: .renamed)
+                file.oldPath = oldPath
+                files.append(file)
+                index = tokens.index(index, offsetBy: 3)
+            } else if let status = DiffFile.Status(rawValue: String(kind)) {
+                guard tokens.index(after: index) < tokens.endIndex else { break }
+                files.append(DiffFile(
+                    relativePath: tokens[tokens.index(after: index)],
+                    status: status
+                ))
+                index = tokens.index(index, offsetBy: 2)
+            } else {
+                index = tokens.index(after: index)
             }
         }
         return files
     }
 
-    /// Union untracked files (`git ls-files --others --exclude-standard`) into
-    /// the list as `.added`, skipping any path already present (Hardening 1).
+    private static func isNameStatusToken(_ token: String) -> Bool {
+        guard let first = token.first, "AMDR".contains(first) else { return false }
+        if token.count == 1 { return true }
+        // Rename scores: R000–R100.
+        return first == "R" && token.dropFirst().allSatisfy(\.isNumber)
+    }
+
+    /// Union untracked files (`git ls-files --others --exclude-standard -z`)
+    /// into the list as `.added`, skipping any path already present.
     private static func appendUntrackedFiles(into files: inout [DiffFile], at path: String) {
-        guard let output = run(args: ["ls-files", "--others", "--exclude-standard"], in: path) else {
+        guard let data = runData(args: ["ls-files", "--others", "--exclude-standard", "-z"], in: path) else {
             return
         }
         let existing = Set(files.map { $0.relativePath })
-        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
-            let filePath = String(rawLine)
+        for record in data.split(separator: 0, omittingEmptySubsequences: true) {
+            let filePath = String(decoding: record, as: UTF8.self)
             guard !filePath.isEmpty, !existing.contains(filePath) else { continue }
             files.append(DiffFile(relativePath: filePath, status: .added))
         }
@@ -326,6 +491,7 @@ enum GitOperations {
 
     /// Parse `git diff --numstat <ref>` into `[path: (added, deleted)]`.
     /// Binary files print `-\t-\t<path>`, mapped to `(nil, nil)`.
+    /// Kept for compatibility; new code paths use `numstatZ`.
     private static func numstat(args: [String], in path: String) -> [String: (added: Int?, deleted: Int?)] {
         guard let output = run(args: args, in: path) else { return [:] }
         var result: [String: (added: Int?, deleted: Int?)] = [:]
@@ -338,6 +504,40 @@ enum GitOperations {
             // brace-compacted path; the final field is the (new) path.
             let filePath = String(fields[fields.count - 1])
             result[filePath] = (added, deleted)
+        }
+        return result
+    }
+
+    /// Parse nul-separated `git diff --numstat -z` output into
+    /// `[newPath: (added, deleted)]`. Each record is
+    /// `<added> TAB <deleted> TAB <path> NUL`, or for renames
+    /// `<added> TAB <deleted> NUL <old> NUL <new> NUL`. Binary files report
+    /// `-/-` and map to `(nil, nil)`. Keyed by the NEW path so rename counts
+    /// attach to the listed file (brace-compacted paths can't occur with -z).
+    static func numstatZ(args: [String], in path: String) -> [String: (added: Int?, deleted: Int?)] {
+        guard let data = runData(args: args, in: path) else { return [:] }
+        var result: [String: (added: Int?, deleted: Int?)] = [:]
+        // NUL-split records; each record's fields split on TAB.
+        var records = data.split(separator: 0, omittingEmptySubsequences: false).makeIterator()
+        while let record = records.next() {
+            if record.isEmpty { continue }
+            let fields = record.split(separator: UInt8(ascii: "\t"), omittingEmptySubsequences: false)
+            guard fields.count >= 2 else { continue }
+            let added = fields[0].elementsEqual([UInt8(ascii: "-")]) ? nil : Int(String(decoding: fields[0], as: UTF8.self))
+            let deleted = fields[1].elementsEqual([UInt8(ascii: "-")]) ? nil : Int(String(decoding: fields[1], as: UTF8.self))
+            if fields.count >= 3 {
+                // Normal record: path embedded in the same record. (A 4-field
+                // record is a non-z-style rename line; key on the new path.)
+                let filePath = String(decoding: fields[fields.count - 1], as: UTF8.self)
+                result[filePath] = (added, deleted)
+            } else {
+                // Rename record: old + new paths follow as separate records.
+                guard let oldRecord = records.next(), let newRecord = records.next() else { break }
+                _ = oldRecord
+                let newPath = String(decoding: newRecord, as: UTF8.self)
+                guard !newPath.isEmpty else { continue }
+                result[newPath] = (added, deleted)
+            }
         }
         return result
     }
@@ -395,11 +595,32 @@ enum GitOperations {
     }
 
     /// Number of newline-terminated lines in a file (best-effort, 0 on failure).
+    /// Counts `0x0A` bytes directly: encoding-agnostic and avoids loading the
+    /// whole file as a UTF-8 String (which fails on non-UTF8 encodings).
     private static func lineCount(atPath path: String) -> Int {
-        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
-        if content.isEmpty { return 0 }
-        return content.split(separator: "\n", omittingEmptySubsequences: false).count
-            - (content.hasSuffix("\n") ? 1 : 0)
+        guard let handle = FileHandle(forReadingAtPath: path) else { return 0 }
+        defer { try? handle.close() }
+        var newlines = 0
+        var totalBytes = 0
+        var lastByte: UInt8 = 0
+        while true {
+            guard let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty else { break }
+            totalBytes += chunk.count
+            for byte in chunk {
+                if byte == 0x0A { newlines += 1 }
+                lastByte = byte
+            }
+        }
+        guard totalBytes > 0 else { return 0 }
+        return newlines + (lastByte == 0x0A ? 0 : 1)
+    }
+
+    /// Lossy UTF-8 decode of file bytes: undecodable sequences become U+FFFD
+    /// instead of failing the whole read (which previously rendered non-UTF8
+    /// text files as empty diffs).
+    static func lossyFileText(atPath path: String) -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Create a git worktree for a workstream, branching off the default branch.
@@ -909,6 +1130,100 @@ enum GitOperations {
         return result.isEmpty ? "unnamed" : result
     }
 
+    /// Raw-bytes variant of `run(args:in:)` for nul-separated git output
+    /// (`-z` modes), where NUL bytes are record framing, not string content.
+    /// Same deadlock avoidance: both pipes drained before `waitUntilExit`.
+    static func runData(args: [String], in directory: String) -> Data? {
+        guard let gitPath else {
+            logger.warning("[FF] git runData: gitPath is nil")
+            return nil
+        }
+        let process = Process()
+        let pipe = Pipe()
+        let errPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: gitPath)
+        process.arguments = args
+        process.currentDirectoryURL = URL(fileURLWithPath: directory)
+        process.standardOutput = pipe
+        process.standardError = errPipe
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            _ = errPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return data
+        } catch {
+            logger.warning("[FF] git \(args.joined(separator: " "), privacy: .public) threw: \(error, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Single-process `git cat-file --batch` driver. `queries` maps 1:1 to the
+    /// stdin lines written (`<ref>:<lookupPath>`); returns blob bytes keyed by
+    /// the query index. Missing blobs yield nil. Callers decode lossy UTF-8.
+    private static func runCatFileBatch(in directory: String, ref: String, paths: [String]) -> [(String, String)] {
+        guard let gitPath, !paths.isEmpty else { return [] }
+        let process = Process()
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: gitPath)
+        process.arguments = ["cat-file", "--batch"]
+        process.currentDirectoryURL = URL(fileURLWithPath: directory)
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        do {
+            try process.run()
+        } catch {
+            logger.warning("[FF] git cat-file --batch threw: \(error, privacy: .public)")
+            return []
+        }
+        // Queries are short path lines; write them all up front, then close
+        // stdin so the child sees EOF. Stdout is drained after (below).
+        var input = ""
+        input.reserveCapacity(paths.reduce(0) { $0 + $1.utf8.count + ref.utf8.count + 2 })
+        for lookupPath in paths {
+            input += "\(ref):\(lookupPath)\n"
+        }
+        if let inputData = input.data(using: .utf8) {
+            stdinPipe.fileHandleForWriting.write(inputData)
+        }
+        try? stdinPipe.fileHandleForWriting.close()
+        let output = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        _ = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return [] }
+
+        // Frame: `<sha> <type> <size>\n<content bytes>\n` per query, in order;
+        // missing blobs report `<query> missing\n` with no content.
+        var results: [(String, String)] = []
+        results.reserveCapacity(paths.count)
+        var cursor = output.startIndex
+        for queried in paths {
+            guard cursor < output.endIndex,
+                  let lineEnd = output[cursor...].firstIndex(of: UInt8(ascii: "\n"))
+            else { break }
+            let header = String(decoding: output[cursor ..< lineEnd], as: UTF8.self)
+            cursor = output.index(after: lineEnd)
+            let parts = header.split(separator: " ")
+            guard parts.count == 3, parts[1] != "missing", let size = Int(parts[2]) else {
+                results.append((queried, ""))
+                continue
+            }
+            let contentEnd = output.index(cursor, offsetBy: size, limitedBy: output.endIndex) ?? output.endIndex
+            let text = String(decoding: output[cursor ..< contentEnd], as: UTF8.self)
+            cursor = contentEnd
+            // Consume the single trailing newline after the content blob.
+            if cursor < output.endIndex, output[cursor] == UInt8(ascii: "\n") {
+                cursor = output.index(after: cursor)
+            }
+            results.append((queried, text))
+        }
+        return results
+    }
+
     private static func run(args: [String], in directory: String) -> String? {
         guard let gitPath else {
             logger.warning("[FF] git run: gitPath is nil")
@@ -943,4 +1258,9 @@ enum GitOperations {
             return nil
         }
     }
+}
+
+private extension String {
+    /// nil when the string is empty — trims `git` output handling.
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

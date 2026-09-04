@@ -292,6 +292,13 @@
 "Refresh changes" = "Actualitza els canvis";
 "Binary file (not shown)" = "Fitxer binari (no mostrat)";
 "Large file — %d changes, click to load" = "Fitxer gran — %d canvis, fes clic per carregar";
+"%d of %d viewed" = "%d de %d revisats";
+"Collapse all files" = "Replega tots els fitxers";
+"Expand all files" = "Desplega tots els fitxers";
+"Collapse file" = "Replega el fitxer";
+"Expand file" = "Desplega el fitxer";
+"Mark as viewed" = "Marca com a revisat";
+"Viewed" = "Revisat";
 
 /* Changes sidebar - Files changed tree */
 "Files changed" = "Fitxers canviats";

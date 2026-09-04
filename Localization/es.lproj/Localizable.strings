@@ -292,6 +292,13 @@
 "Refresh changes" = "Actualizar cambios";
 "Binary file (not shown)" = "Archivo binario (no mostrado)";
 "Large file — %d changes, click to load" = "Archivo grande — %d cambios, haz clic para cargar";
+"%d of %d viewed" = "%d de %d revisados";
+"Collapse all files" = "Contraer todos los archivos";
+"Expand all files" = "Expandir todos los archivos";
+"Collapse file" = "Contraer archivo";
+"Expand file" = "Expandir archivo";
+"Mark as viewed" = "Marcar como revisado";
+"Viewed" = "Revisado";
 
 /* Changes sidebar - Files changed tree */
 "Files changed" = "Archivos cambiados";
