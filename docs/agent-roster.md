@@ -76,7 +76,7 @@ worktree paths match.
 | `Sources/PixelAgents/HookEventReceiver.swift` | NWListener singleton. Parses HTTP POST, maps hook events to `AgentEvent`, derives activity strings from tool name + input, attaches `transcript_path` and OpenCode context figures. |
 | `Sources/PixelAgents/HookEventRouter.swift` | Singleton registry routing events by normalized path. |
 | `Sources/PixelAgents/HookInstaller.swift` | Idempotent install/uninstall of hook entries in `~/.claude/settings.json`. |
-| `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`, `agentInfo`. |
+| `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`, `agentInfo`, `agentSessionSwitched` (new top-level harness session in the same worktree → reset). |
 | `Sources/PixelAgents/TranscriptContextReader.swift` | Extracts context-window usage from Claude Code transcript tails and OpenCode token payloads. |
 | `Sources/PixelAgents/ContextLimits.swift` | Maps model IDs to context-window limits (200k default, 1M extended). |
 | `Sources/PixelAgents/AgentSpriteStore.swift` | Loads agent portraits for the roster (`avatar_<type>_<k>.png` sets with palette-slot fallback). |
@@ -149,8 +149,27 @@ read keeps the previously known value.
 **OpenCode** — the bundled plugin (`factoryfloor-opencode.js`) sums each
 assistant message's cumulative tokens (`input` + `cache.read` +
 `cache.write`) and forwards the total as `context_used` on `agent_info`
-events. The dedup fingerprint includes the total, so refreshed figures flow
-through even when name and model are unchanged.
+events. The dedup fingerprint includes the session id and the total, so
+refreshed figures flow through even when name and model are unchanged, and a
+new session never inherits the previous session's fingerprint.
+
+Every plugin payload carries `session_id`. When a new top-level session
+replaces the worktree's tracked conversation (e.g. `/new` in the TUI, or a
+resumed session's first `chat.message`), the plugin sends `session_switched`
+and the tracker resets that workstream — roster, context snapshot, and read
+throttle are dropped so the new session's live figures show immediately. A
+late `idle` from the superseded session is ignored rather than wiping the new
+roster. The same guard exists for Claude: a changed `transcript_path`
+mid-stream drops the old snapshot (roster untouched — concurrent Claudes
+share the main run and can't be split).
+
+The `question` tool (no dedicated bus event exists) is reported as
+`tool_start` **plus** `permission_required`, so a pending user question shows
+the orange "Waiting for approval" state and never decays into "Stalled". Its
+activity text maps to "Asking question", never the raw tool name. Tool events
+are deduped between the direct `tool.execute.*` hooks (primary) and the
+`event:`-bus copies, so a future CLI version delivering both won't
+double-fire and mask real stalls.
 
 Limits come from `ContextLimits`: 200k tokens by default, 1M when the model
 ID contains `[1m]` or `-1m` (case-insensitive, e.g.

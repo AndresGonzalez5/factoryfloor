@@ -27,6 +27,10 @@ struct AgentEvent: Codable, Sendable {
     /// Short task description OpenCode attaches to delegated subagents
     /// (e.g. "Map people/task completion code"), shown as a roster subtitle.
     var taskDescription: String?
+    /// Harness session this event belongs to (OpenCode `session_id`).
+    /// Lets the tracker tell a new conversation in the same worktree apart
+    /// from the previous one so their context figures and rosters don't mix.
+    var sessionID: String?
 
     enum EventType: String, Codable, Sendable {
         case agentCreated
@@ -37,6 +41,9 @@ struct AgentEvent: Codable, Sendable {
         case agentIdle
         case agentWaiting
         case agentInfo
+        /// The harness started a new top-level session in the same worktree
+        /// (e.g. opencode `/new`); the tracker resets to the new conversation.
+        case agentSessionSwitched
     }
 
     enum CodingKeys: String, CodingKey {
@@ -53,6 +60,7 @@ struct AgentEvent: Codable, Sendable {
         case contextUsedTokens
         case contextLimitTokens
         case taskDescription
+        case sessionID
     }
 
     // -- Factory methods --
@@ -73,24 +81,42 @@ struct AgentEvent: Codable, Sendable {
         AgentEvent(type: .agentRemoved, agentId: agentId)
     }
 
-    static func status(agentId: String, status: String, transcriptPath: String? = nil) -> AgentEvent {
-        AgentEvent(type: .agentStatus, agentId: agentId, status: status, transcriptPath: transcriptPath)
+    static func status(agentId: String, status: String, transcriptPath: String? = nil, sessionID: String? = nil) -> AgentEvent {
+        var event = AgentEvent(type: .agentStatus, agentId: agentId, status: status, transcriptPath: transcriptPath)
+        event.sessionID = sessionID
+        return event
     }
 
-    static func toolStart(agentId: String, tool: String, activity: String? = nil, transcriptPath: String? = nil) -> AgentEvent {
-        AgentEvent(type: .agentToolStart, agentId: agentId, tool: tool, activity: activity, transcriptPath: transcriptPath)
+    static func toolStart(agentId: String, tool: String, activity: String? = nil, transcriptPath: String? = nil, sessionID: String? = nil) -> AgentEvent {
+        var event = AgentEvent(type: .agentToolStart, agentId: agentId, tool: tool, activity: activity, transcriptPath: transcriptPath)
+        event.sessionID = sessionID
+        return event
     }
 
-    static func toolDone(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
-        AgentEvent(type: .agentToolDone, agentId: agentId, transcriptPath: transcriptPath)
+    static func toolDone(agentId: String, transcriptPath: String? = nil, sessionID: String? = nil) -> AgentEvent {
+        var event = AgentEvent(type: .agentToolDone, agentId: agentId, transcriptPath: transcriptPath)
+        event.sessionID = sessionID
+        return event
     }
 
-    static func idle(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
-        AgentEvent(type: .agentIdle, agentId: agentId, transcriptPath: transcriptPath)
+    static func idle(agentId: String, transcriptPath: String? = nil, sessionID: String? = nil) -> AgentEvent {
+        var event = AgentEvent(type: .agentIdle, agentId: agentId, transcriptPath: transcriptPath)
+        event.sessionID = sessionID
+        return event
     }
 
-    static func waiting(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
-        AgentEvent(type: .agentWaiting, agentId: agentId, transcriptPath: transcriptPath)
+    static func waiting(agentId: String, transcriptPath: String? = nil, sessionID: String? = nil) -> AgentEvent {
+        var event = AgentEvent(type: .agentWaiting, agentId: agentId, transcriptPath: transcriptPath)
+        event.sessionID = sessionID
+        return event
+    }
+
+    /// The harness replaced the worktree's tracked conversation with a new
+    /// top-level session. The tracker resets roster and context to it.
+    static func sessionSwitched(sessionID: String) -> AgentEvent {
+        var event = AgentEvent(type: .agentSessionSwitched, agentId: "main")
+        event.sessionID = sessionID
+        return event
     }
 
     /// Attribute refresh for an existing roster run (display name, model,
@@ -100,13 +126,15 @@ struct AgentEvent: Codable, Sendable {
         name: String?,
         model: String? = nil,
         contextUsedTokens: Int? = nil,
-        transcriptPath: String? = nil
+        transcriptPath: String? = nil,
+        sessionID: String? = nil
     ) -> AgentEvent {
         var event = AgentEvent(type: .agentInfo, agentId: agentId, transcriptPath: transcriptPath)
         event.name = name
         event.model = model
         event.contextUsedTokens = contextUsedTokens
         event.contextLimitTokens = ContextLimits.limitTokens(forModel: model)
+        event.sessionID = sessionID
         return event
     }
 }

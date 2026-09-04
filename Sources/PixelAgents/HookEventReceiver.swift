@@ -277,6 +277,11 @@ final class HookEventReceiver: @unchecked Sendable {
             return NSLocalizedString("Browsing", comment: "Agent is fetching web content")
         case "todowrite", "todoread":
             return NSLocalizedString("Planning", comment: "Agent is updating its task plan")
+        case "question":
+            // OpenCode's built-in question tool: the agent is blocked asking
+            // the user something. Never surface the raw tool name (see
+            // tool_start mapping, which raises permissionRequired alongside).
+            return NSLocalizedString("Asking question", comment: "Agent is asking the user a question")
         case "task":
             return NSLocalizedString("Delegating", comment: "Agent is delegating to a subagent")
         default:
@@ -372,12 +377,14 @@ final class HookEventReceiver: @unchecked Sendable {
     // MARK: - OpenCode Mapping
 
     /// Maps a Factory Floor opencode plugin payload to zero or more `AgentEvent`s.
-    /// Payload shape: `{ kind, agent_id, name?, tool?, file_path?, session_id?, parent_session_id? }`.
+    /// Payload shape: `{ kind, agent_id, name?, tool?, file_path?, session_id?,
+    /// previous_session_id?, parent_session_id? }`.
     /// Must be called on `self.queue`.
     private func mapOpencodeEvent(eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
         let kind = eventInput["kind"] as? String ?? ""
         let aid = eventInput["agent_id"] as? String ?? "main"
         let name = eventInput["name"] as? String
+        let sessionID = eventInput["session_id"] as? String
 
         switch kind {
         case "tool_start":
@@ -387,24 +394,34 @@ final class HookEventReceiver: @unchecked Sendable {
                 toolInput = ["file_path": filePath]
             }
             let activity = Self.activityDescription(toolName: toolName, toolInput: toolInput)
-            var event = AgentEvent.toolStart(agentId: aid, tool: toolName, activity: activity)
+            var event = AgentEvent.toolStart(agentId: aid, tool: toolName, activity: activity, sessionID: sessionID)
             event.name = name
+            // The `question` tool blocks on the user's answer without ending
+            // the session and without a dedicated bus event (the plugin also
+            // sends permission_required for it, but belt-and-braces here
+            // covers older plugin versions that only sent tool_start).
+            // Tool event first, status second: the tracker clears permission
+            // on tool activity, so status must win the ordering.
+            if toolName.lowercased() == "question" {
+                let status = AgentEvent.status(agentId: aid, status: "permissionRequired", sessionID: sessionID)
+                return [event, status]
+            }
             return [event]
 
         case "tool_done":
-            var event = AgentEvent.toolDone(agentId: aid)
+            var event = AgentEvent.toolDone(agentId: aid, sessionID: sessionID)
             event.name = name
             return [event]
 
         case "working":
             // Heartbeat while streaming a response — keeps the run alive
             // without changing its activity description.
-            var event = AgentEvent.toolStart(agentId: aid, tool: "respond")
+            var event = AgentEvent.toolStart(agentId: aid, tool: "respond", sessionID: sessionID)
             event.name = name
             return [event]
 
         case "waiting":
-            var event = AgentEvent.waiting(agentId: aid)
+            var event = AgentEvent.waiting(agentId: aid, sessionID: sessionID)
             event.name = name
             return [event]
 
@@ -420,15 +437,24 @@ final class HookEventReceiver: @unchecked Sendable {
                 let used = TranscriptContextReader.usedTokens(fromOpencodeTokens: tokens)
                 contextUsed = used > 0 ? used : nil
             }
-            return [AgentEvent.info(agentId: aid, name: name, model: model, contextUsedTokens: contextUsed)]
+            return [AgentEvent.info(agentId: aid, name: name, model: model, contextUsedTokens: contextUsed, sessionID: sessionID)]
 
         case "idle":
-            return [AgentEvent.idle(agentId: aid)]
+            return [AgentEvent.idle(agentId: aid, sessionID: sessionID)]
 
         case "permission_required":
             // Permission and question prompts both block on user input;
-            // they surface identically as row-level attention.
-            return [AgentEvent.status(agentId: "main", status: "permissionRequired")]
+            // they surface identically as row-level attention. Attribute to
+            // the requesting agent when the plugin reports one; the tracker
+            // only raises row-level attention for the main agent.
+            return [AgentEvent.status(agentId: aid, status: "permissionRequired", sessionID: sessionID)]
+
+        case "session_switched":
+            // A new top-level session replaced the worktree's tracked
+            // conversation: reset roster and context snapshot to it.
+            guard let newID = sessionID, !newID.isEmpty else { return [] }
+            logger.info("OpenCode session switched to \(newID, privacy: .public)")
+            return [AgentEvent.sessionSwitched(sessionID: newID)]
 
         case "session_created":
             guard let sessionID = eventInput["session_id"] as? String, !sessionID.isEmpty,
