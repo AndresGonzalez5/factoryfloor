@@ -113,6 +113,11 @@ struct DiffFile: Equatable, Sendable {
     /// Byte size of the modified-side file on disk (0 for deleted/missing).
     /// A second input to the large-file guard (Hardening 3).
     var sizeHint: Int = 0
+
+    /// Modification-time hint (seconds since epoch) of the modified-side file
+    /// on disk (0 for deleted/missing). Feeds the Changes-tab viewed-state
+    /// weak stamp so same-size content swaps still invalidate the mark.
+    var mtimeHint: Double = 0
 }
 
 enum GitOperations {
@@ -542,10 +547,12 @@ enum GitOperations {
         return result
     }
 
-    /// Populate `isBinary`, `changedLines`, and `sizeHint` for each file using
+    /// Populate `isBinary`, `changedLines`, `added`/`deleted`, `sizeHint`, and
+    /// `mtimeHint` for each file using
     /// the numstat map. Tracked binaries come from numstat `-`/`-`; untracked
     /// files (absent from numstat) fall back to a NUL-byte sniff plus a line
-    /// count. `sizeHint` is the on-disk byte size of the modified side.
+    /// count. `sizeHint` is the on-disk byte size of the modified side,
+    /// `mtimeHint` its modification time (both 0 for deleted/missing).
     private static func annotate(
         _ files: inout [DiffFile],
         with stats: [String: (added: Int?, deleted: Int?)],
@@ -555,10 +562,15 @@ enum GitOperations {
             let file = files[index]
             let fullPath = (path as NSString).appendingPathComponent(file.relativePath)
 
-            // sizeHint: byte size of the modified side (0 for deleted/missing).
+            // sizeHint/mtimeHint: modified-side file metadata on disk
+            // (0 for deleted/missing). mtime lets the viewed-state weak stamp
+            // detect same-size content swaps without reading file bodies.
             if file.status != .deleted {
                 let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath)
                 files[index].sizeHint = (attrs?[.size] as? Int) ?? 0
+                if let date = attrs?[.modificationDate] as? Date {
+                    files[index].mtimeHint = date.timeIntervalSince1970
+                }
             }
 
             if let entry = stats[file.relativePath] {

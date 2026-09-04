@@ -780,8 +780,9 @@ struct ChangesView: View {
     }
 
     /// Current review version per path for a built payload: strong content
-    /// hash for entries carrying bodies, weak size stamp for binary/deferred
-    /// placeholders. Pure (testable) so the store prune can run anywhere.
+    /// hash for entries carrying bodies, weak mtime/size stamp for
+    /// binary/deferred placeholders. Pure (testable) so the store prune can
+    /// run anywhere.
     nonisolated static func reviewVersions(
         payload: [[String: Any]],
         files: [DiffFile]
@@ -802,10 +803,7 @@ struct ChangesView: View {
             {
                 versions[path] = contentVersion(original: original, modified: modified)
             } else {
-                versions[path] = ChangesViewStateStore.weakVersion(
-                    changedLines: file.changedLines,
-                    sizeHint: file.sizeHint
-                )
+                versions[path] = ChangesViewStateStore.weakVersion(for: file)
             }
         }
         return versions

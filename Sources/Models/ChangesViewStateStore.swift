@@ -12,7 +12,10 @@ import Foundation
 /// drops every mark whose base moved or whose current version differs —
 /// covering both new commits (base side) and uncommitted edits (worktree
 /// side). Files without readable content (binary/deferred placeholders) use
-/// a weak `"<changedLines>:<sizeHint>"` stamp instead of a content hash.
+/// a weak `"weak:<added>:<deleted>:<changedLines>:<sizeHint>:<mtimeMs>:<bin>"`
+/// stamp (mtime catches same-size content swaps without reading bodies).
+/// Old two-field `"weak:<changedLines>:<sizeHint>"` marks never match the new
+/// shape, so they clear once after upgrade — conservative and safe.
 enum ChangesViewStateStore {
     // MARK: - Viewed
 
@@ -92,9 +95,32 @@ enum ChangesViewStateStore {
 
     /// Weak version stamp for files whose content isn't loaded (binary and
     /// deferred placeholders): invalidates the viewed mark when the file's
-    /// change size moves, which any edit does.
-    static func weakVersion(changedLines: Int, sizeHint: Int) -> String {
-        "weak:\(changedLines):\(sizeHint)"
+    /// change size, line counts, binary flag, or on-disk mtime moves. The mtime
+    /// (milliseconds since epoch) catches the edge case where a content swap
+    /// leaves line counts and byte size identical — any real edit bumps mtime.
+    /// Deleted/missing files report mtime 0 (base moves still invalidate).
+    static func weakVersion(
+        changedLines: Int,
+        sizeHint: Int,
+        mtime: Double = 0,
+        added: Int = -1,
+        deleted: Int = -1,
+        isBinary: Bool = false
+    ) -> String {
+        let mtimeMs = Int((mtime * 1000).rounded())
+        return "weak:\(added):\(deleted):\(changedLines):\(sizeHint):\(mtimeMs):\(isBinary ? 1 : 0)"
+    }
+
+    /// Convenience overload stamping directly from a listed file.
+    static func weakVersion(for file: DiffFile) -> String {
+        weakVersion(
+            changedLines: file.changedLines,
+            sizeHint: file.sizeHint,
+            mtime: file.mtimeHint,
+            added: file.added,
+            deleted: file.deleted,
+            isBinary: file.isBinary
+        )
     }
 
     /// Validate one viewed mark against a freshly loaded version (used when a

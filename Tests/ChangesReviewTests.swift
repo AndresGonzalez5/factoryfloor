@@ -103,10 +103,17 @@ final class ChangesContentLimitTests: XCTestCase {
     }
 
     func testReviewVersionsStrongForBodiesWeakForPlaceholders() {
+        var binaryFile = DiffFile(relativePath: "big.bin", status: .added, isBinary: true)
+        binaryFile.mtimeHint = 1234.5
+        var hugeFile = DiffFile(relativePath: "huge.txt", status: .modified, changedLines: 9999)
+        hugeFile.added = 6000
+        hugeFile.deleted = 3999
+        hugeFile.sizeHint = 4096
+        hugeFile.mtimeHint = 42
         let files = [
             DiffFile(relativePath: "a.swift", status: .modified, changedLines: 4, added: 3, deleted: 1),
-            DiffFile(relativePath: "big.bin", status: .added, isBinary: true),
-            DiffFile(relativePath: "huge.txt", status: .modified, changedLines: 9999),
+            binaryFile,
+            hugeFile,
         ]
         let payload: [[String: Any]] = [
             ["filePath": "a.swift", "originalText": "old", "modifiedText": "new"],
@@ -115,11 +122,44 @@ final class ChangesContentLimitTests: XCTestCase {
         ]
         let versions = ChangesView.reviewVersions(payload: payload, files: files)
         XCTAssertEqual(versions["a.swift"], ChangesView.contentVersion(original: "old", modified: "new"))
-        XCTAssertEqual(versions["big.bin"], ChangesViewStateStore.weakVersion(changedLines: 0, sizeHint: 0))
+        XCTAssertEqual(versions["big.bin"], ChangesViewStateStore.weakVersion(for: binaryFile))
         XCTAssertEqual(
             versions["huge.txt"],
-            ChangesViewStateStore.weakVersion(changedLines: 9999, sizeHint: 0)
+            ChangesViewStateStore.weakVersion(for: hugeFile)
         )
+    }
+
+    func testWeakVersionDetectsSameSizeContentSwapViaMtime() {
+        // Same line counts and byte size, different mtime: must differ so a
+        // same-size edit still clears the Viewed mark.
+        let before = ChangesViewStateStore.weakVersion(
+            changedLines: 10, sizeHint: 100, mtime: 1000, added: 5, deleted: 5
+        )
+        let after = ChangesViewStateStore.weakVersion(
+            changedLines: 10, sizeHint: 100, mtime: 2000, added: 5, deleted: 5
+        )
+        XCTAssertNotEqual(before, after)
+    }
+
+    func testWeakVersionDistinguishesAddedDeletedMix() {
+        // +7/-3 vs +3/-7: same changedLines, different mix — must differ.
+        let a = ChangesViewStateStore.weakVersion(
+            changedLines: 10, sizeHint: 100, mtime: 1000, added: 7, deleted: 3
+        )
+        let b = ChangesViewStateStore.weakVersion(
+            changedLines: 10, sizeHint: 100, mtime: 1000, added: 3, deleted: 7
+        )
+        XCTAssertNotEqual(a, b)
+    }
+
+    func testWeakVersionLegacyMarksDoNotSurvive() {
+        // Pre-upgrade two-field stamps must not match the new shape, so stale
+        // marks clear once instead of lingering.
+        let legacy = "weak:10:100"
+        let current = ChangesViewStateStore.weakVersion(
+            changedLines: 10, sizeHint: 100, mtime: 0, added: 5, deleted: 5
+        )
+        XCTAssertNotEqual(legacy, current)
     }
 }
 

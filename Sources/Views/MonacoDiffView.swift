@@ -261,9 +261,7 @@ final class MonacoDiffBridge: ObservableObject {
                     languageId: languageId
                 )
                 if let context {
-                    let version = GitOperations.stableHash(
-                        "\(original.count)\n\(original)\n\(modified.count)\n\(modified)"
-                    )
+                    let version = ChangesView.contentVersion(original: original, modified: modified)
                     let survives = ChangesViewStateStore.validateViewed(
                         workstreamID: context.workstreamID,
                         mode: context.mode,
