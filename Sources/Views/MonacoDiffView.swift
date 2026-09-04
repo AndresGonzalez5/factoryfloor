@@ -27,6 +27,22 @@ final class MonacoDiffBridge: ObservableObject {
     /// ChangesView installs this so the bridge has the current workDir + base ref.
     var onLoadFile: ((_ filePath: String) -> (original: String, modified: String, languageId: String))?
 
+    /// Fired when a diff header's Viewed checkbox toggles in JS.
+    var onViewedChanged: ((_ filePath: String, _ viewed: Bool) -> Void)?
+    /// Fired when a diff section collapses/expands in JS.
+    var onCollapsedChanged: ((_ filePath: String, _ collapsed: Bool) -> Void)?
+
+    /// Review identity for the currently rendered content. Set per load by
+    /// ChangesView so deferred content arriving later can validate viewed
+    /// marks against the right workstream/mode/base.
+    struct ReviewContext: Equatable {
+        var workstreamID: UUID
+        var mode: String
+        var base: String
+    }
+
+    var reviewContext: ReviewContext?
+
     /// Git fingerprint from the last successful setFiles() call. ChangesView uses
     /// it to skip reloading when nothing in git has changed between tab visits.
     var lastFingerprint: String?
@@ -37,6 +53,15 @@ final class MonacoDiffBridge: ObservableObject {
     /// Number of files from the last setFiles() call. Stored here (not @State) so
     /// it survives the SwiftUI view being re-created on a tab switch.
     var lastFileCount = 0
+
+    /// Toolbar base-range label (e.g. "main…a1b2c3d") from the last load.
+    /// Cached alongside the other `last*` fields for instant tab revisits.
+    var lastBaseLabel = ""
+
+    /// Monotonic content generation. Bumped on every setFiles/setShells so
+    /// late `contentReady` callbacks from a superseded render can be ignored
+    /// by comparing against the generation captured at load time.
+    private(set) var contentGeneration = 0
 
     /// Structured changed-file list from the last load. Cached here (not @State)
     /// so the Changes sidebar tree survives the SwiftUI view being re-created on
@@ -88,12 +113,17 @@ final class MonacoDiffBridge: ObservableObject {
     /// Render the given files as a stack of Monaco diff editors.
     /// Each dict carries: filePath, status, languageId, originalText, modifiedText,
     /// and optionally binary/deferred/changedLines for the placeholder cases.
+    /// Bumps `contentGeneration`; `contentReady` handlers should compare the
+    /// generation they captured against the current value to drop late
+    /// callbacks from superseded renders.
     func setFiles(_ files: [[String: Any]]) {
         hasContent = true
+        contentGeneration += 1
+        let generation = contentGeneration
         enqueue {
             guard let webView = self.webView else { return }
             guard let json = Self.jsonString(from: files) else { return }
-            webView.evaluateJavaScript("window.diffAPI.setFiles(\(json))")
+            webView.evaluateJavaScript("window.diffAPI.setFiles(\(json), \(generation))")
         }
     }
 
@@ -140,11 +170,32 @@ final class MonacoDiffBridge: ObservableObject {
     /// Scroll the diff page so the given file's section is at the top. Queues
     /// until the webview is ready, mirroring the other bridge calls. Works for
     /// normal, binary, and deferred files (each registers a section element).
+    /// JS force-mounts the target when it is still a lazy placeholder, so the
+    /// scroll always lands even for never-visited files.
     func scrollToFile(_ path: String) {
         enqueue {
             guard let webView = self.webView else { return }
             guard let json = Self.jsonString(fromString: path) else { return }
             webView.evaluateJavaScript("window.diffAPI.scrollToFile(\(json))")
+        }
+    }
+
+    /// Set one file's Viewed checkbox state from Swift (e.g. clearing a stale
+    /// mark whose content changed under it).
+    func setViewed(filePath: String, viewed: Bool) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            guard let json = Self.jsonString(fromString: filePath) else { return }
+            webView.evaluateJavaScript("window.diffAPI.setViewed(\(json), \(viewed ? "true" : "false"))")
+        }
+    }
+
+    /// Collapse or expand every section at once (toolbar Expand/Collapse all).
+    /// Per-file persistence is updated by the caller; JS applies silently.
+    func setAllCollapsed(_ collapsed: Bool) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            webView.evaluateJavaScript("window.diffAPI.setAllCollapsed(\(collapsed ? "true" : "false"))")
         }
     }
 
@@ -175,6 +226,10 @@ final class MonacoDiffBridge: ObservableObject {
             "noChanges": NSLocalizedString("No changes", comment: "Changes tab: empty state"),
             "copyFile": NSLocalizedString("Copy File Path", comment: "Changes diff header: copy file path button"),
             "copied": NSLocalizedString("File path copied", comment: "Changes diff header: copy confirmation"),
+            "collapseSection": NSLocalizedString("Collapse file", comment: "Changes diff header: collapse file section"),
+            "expandSection": NSLocalizedString("Expand file", comment: "Changes diff header: expand file section"),
+            "markViewed": NSLocalizedString("Mark as viewed", comment: "Changes diff header: mark file as viewed"),
+            "viewed": NSLocalizedString("Viewed", comment: "Changes diff header: viewed checkbox label"),
         ]
         guard let json = Self.jsonString(from: strings) else { return }
         webView.evaluateJavaScript("window.diffAPI.setStrings(\(json))")
@@ -185,17 +240,40 @@ final class MonacoDiffBridge: ObservableObject {
     }
 
     /// Resolve content for a deferred file off the main thread, then inject it.
+    /// Afterwards, validate the file's viewed mark against the freshly loaded
+    /// content: an edit that landed after marking viewed clears the checkbox,
+    /// GitHub-style.
     fileprivate func handleLoadFile(_ filePath: String) {
         guard let resolver = onLoadFile else { return }
+        let context = reviewContext
         DispatchQueue.global(qos: .userInitiated).async {
             let (original, modified, languageId) = resolver(filePath)
             DispatchQueue.main.async {
+                // The resolver belongs to the load that installed it; if a
+                // mode switch or refresh replaced the review context while git
+                // was reading, this content is from the wrong base — drop it.
+                // (JS also drops it via its own generation check.)
+                guard self.reviewContext == context else { return }
                 self.loadFileContent(
                     filePath: filePath,
                     originalText: original,
                     modifiedText: modified,
                     languageId: languageId
                 )
+                if let context {
+                    let version = ChangesView.contentVersion(original: original, modified: modified)
+                    let survives = ChangesViewStateStore.validateViewed(
+                        workstreamID: context.workstreamID,
+                        mode: context.mode,
+                        base: context.base,
+                        path: filePath,
+                        version: version
+                    )
+                    if !survives {
+                        self.setViewed(filePath: filePath, viewed: false)
+                        self.onViewedChanged?(filePath, false)
+                    }
+                }
             }
         }
     }
@@ -280,6 +358,18 @@ final class MonacoDiffBridge: ObservableObject {
                 case "loadFile":
                     if let filePath = body["filePath"] as? String {
                         self.bridge.handleLoadFile(filePath)
+                    }
+                case "viewed":
+                    if let filePath = body["filePath"] as? String,
+                       let viewed = body["viewed"] as? Bool
+                    {
+                        self.bridge.onViewedChanged?(filePath, viewed)
+                    }
+                case "sectionToggled":
+                    if let filePath = body["filePath"] as? String,
+                       let collapsed = body["collapsed"] as? Bool
+                    {
+                        self.bridge.onCollapsedChanged?(filePath, collapsed)
                     }
                 case "copyPath":
                     if let filePath = body["filePath"] as? String {

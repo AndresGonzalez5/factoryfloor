@@ -107,6 +107,10 @@ struct FileTreeNode: Identifiable, Equatable {
 struct ChangesFileTreeSidebar: View {
     let files: [DiffFile]
     @Binding var selectedFilePath: String?
+    /// False while a diff load is in flight. The tree dims and ignores
+    /// selection so a file can never be picked before its diff exists —
+    /// the select-during-load race is removed by construction.
+    var isEnabled = true
     let onSelect: (String) -> Void
 
     private var rootChildren: [FileTreeNode] {
@@ -124,11 +128,14 @@ struct ChangesFileTreeSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .disabled(!isEnabled)
         .accessibilityLabel(Text("Files changed"))
         // Selection drives the scroll — works for both mouse clicks and keyboard
         // navigation. Skipped when selection is cleared (mode switch / reload).
+        // Gated on isEnabled so programmatic clears during reload never fire.
         .onChange(of: selectedFilePath) { _, newValue in
-            if let newValue { onSelect(newValue) }
+            guard isEnabled, let newValue else { return }
+            onSelect(newValue)
         }
     }
 }
