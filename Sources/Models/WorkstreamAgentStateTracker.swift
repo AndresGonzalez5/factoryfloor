@@ -91,6 +91,13 @@ final class WorkstreamAgentStateTracker: ObservableObject {
     @Published private(set) var contextUsage: [UUID: ContextUsage] = [:]
 
     private var lastContextReadAt: [UUID: Date] = [:]
+    /// Harness session currently tracked per workstream (OpenCode `session_id`).
+    /// A new conversation in the same worktree must reset roster and context
+    /// instead of mixing with the previous session's figures.
+    private var currentSessionIDs: [UUID: String] = [:]
+    /// Claude transcript path currently tracked per workstream. A different
+    /// path mid-stream means a second Claude session in the same worktree.
+    private var currentTranscriptPaths: [UUID: String] = [:]
 
     /// Resolves a Claude `project_dir` payload to the matching workstream UUID.
     /// Set by `ContentView` whenever the project list changes.
@@ -153,6 +160,8 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         liveSessionIDs.remove(workstreamID)
         contextUsage.removeValue(forKey: workstreamID)
         lastContextReadAt.removeValue(forKey: workstreamID)
+        currentSessionIDs.removeValue(forKey: workstreamID)
+        currentTranscriptPaths.removeValue(forKey: workstreamID)
     }
 
     /// Clears every tracked state. Used by tests to isolate cases.
@@ -162,6 +171,8 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         liveSessionIDs.removeAll()
         contextUsage.removeAll()
         lastContextReadAt.removeAll()
+        currentSessionIDs.removeAll()
+        currentTranscriptPaths.removeAll()
         workstreamLookup = nil
         currentSelection = nil
     }
@@ -193,6 +204,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
         ensureSweepTimer()
         liveSessionIDs.insert(wsID)
+        detectSessionSwitch(wsID: wsID, event: event)
         updateRoster(wsID: wsID, event: event)
         if event.agentId == "main" {
             updateMainState(wsID: wsID, event: event)
@@ -200,6 +212,66 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                 refreshContextUsage(wsID: wsID, transcriptPath: transcriptPath, force: event.type == .agentIdle)
             }
         }
+    }
+
+    /// Detects that the workstream's tracked conversation was replaced and
+    /// resets to the new session so stale roster runs and context snapshots
+    /// don't leak across sessions sharing one worktree.
+    private func detectSessionSwitch(wsID: UUID, event: AgentEvent) {
+        // Explicit harness signal (opencode `session_switched`) always wins.
+        if event.type == .agentSessionSwitched, let sid = event.sessionID, !sid.isEmpty {
+            if currentSessionIDs[wsID] != sid {
+                logger.info("Session switched in workstream \(wsID) — resetting to new session")
+                resetToNewSession(wsID: wsID, sessionID: sid)
+                currentTranscriptPaths.removeValue(forKey: wsID)
+            }
+            return
+        }
+        // Implicit: a new user prompt carrying an unknown session id (e.g. a
+        // resumed opencode session, which emits no session.created). Only
+        // turn-start events trigger this — late stragglers from the previous
+        // session (idle, tool_done, info) must never rewind the reset; the
+        // scoped idle guard below drops those instead. Subagent runs carry
+        // their own ids and must not trigger this either.
+        if event.type == .agentWaiting, event.agentId == "main",
+           let sid = event.sessionID, !sid.isEmpty {
+            if let current = currentSessionIDs[wsID] {
+                if current != sid {
+                    logger.info("New harness session in workstream \(wsID) — resetting to new session")
+                    resetToNewSession(wsID: wsID, sessionID: sid)
+                    currentTranscriptPaths.removeValue(forKey: wsID)
+                }
+            } else {
+                currentSessionIDs[wsID] = sid
+            }
+        }
+        // Claude side: a different transcript path mid-stream means another
+        // Claude session in the same worktree. Drop the old snapshot (and the
+        // read throttle, so the new file is read immediately) rather than
+        // letting interleaved reads flicker the meter. The roster is left
+        // alone — concurrent Claudes share the main run and can't be split.
+        if event.agentId == "main", let path = event.transcriptPath, !path.isEmpty {
+            if let current = currentTranscriptPaths[wsID] {
+                if current != path {
+                    currentTranscriptPaths[wsID] = path
+                    contextUsage.removeValue(forKey: wsID)
+                    lastContextReadAt.removeValue(forKey: wsID)
+                }
+            } else {
+                currentTranscriptPaths[wsID] = path
+            }
+        }
+    }
+
+    /// Resets a workstream's tracked conversation to a new session: the old
+    /// roster, its context snapshot, and the read throttle are dropped so the
+    /// new session's live figures show immediately.
+    private func resetToNewSession(wsID: UUID, sessionID: String) {
+        rosters.removeValue(forKey: wsID)
+        contextUsage.removeValue(forKey: wsID)
+        lastContextReadAt.removeValue(forKey: wsID)
+        currentSessionIDs[wsID] = sessionID
+        states[wsID] = .working
     }
 
     private func updateRoster(wsID: UUID, event: AgentEvent) {
@@ -318,6 +390,13 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             // roster is about to clear, but the row keeps showing usage
             // until the next turn.
             if event.agentId == "main" {
+                // A late idle from a superseded session must not wipe the
+                // new conversation's live roster or re-snapshot stale figures.
+                if let sid = event.sessionID,
+                   let current = currentSessionIDs[wsID],
+                   sid != current {
+                    break
+                }
                 if let main = list.first(where: \.isMain),
                    let used = main.contextUsedTokens,
                    let limit = main.contextLimitTokens,
@@ -328,6 +407,11 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             } else {
                 list.removeAll { $0.id == event.agentId }
             }
+
+        case .agentSessionSwitched:
+            // Reset already performed in detectSessionSwitch before this ran;
+            // no roster mutation here.
+            break
 
         case .agentStatus:
             // Permission prompts don't change the roster; the sweep skips
@@ -360,10 +444,16 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
     private func updateMainState(wsID: UUID, event: AgentEvent) {
         switch event.type {
-        case .agentWaiting:
+        case .agentWaiting, .agentSessionSwitched:
             states[wsID] = .working
 
         case .agentIdle:
+            // Ignore a late idle from a superseded session.
+            if let sid = event.sessionID,
+               let current = currentSessionIDs[wsID],
+               sid != current {
+                return
+            }
             if currentSelection == wsID {
                 states[wsID] = .idle
             } else {

@@ -404,6 +404,7 @@
 "Running command" = "Executant ordre";
 "Browsing" = "Navegant";
 "Planning" = "Planificant";
+"Asking question" = "Fent una pregunta";
 "Delegating" = "Delegant";
 "Sub-agent" = "Subagent";
 "+%d more" = "+%d més";

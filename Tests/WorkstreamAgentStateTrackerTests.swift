@@ -671,4 +671,117 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         let usage = tracker.mainContextUsage(for: wsID)
         XCTAssertEqual(usage?.usedTokens, 42_000)
     }
+
+    // MARK: - Session switching (multiple sessions, one worktree)
+
+    /// An explicit session switch drops the old snapshot so the new
+    /// conversation's live figures show immediately instead of lingering
+    /// on the previous session's totals until its first turn ends.
+    func testSessionSwitchResetsContextSnapshot() {
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000,
+            sessionID: "ses_A"
+        ))
+        handle(.idle(agentId: "main", sessionID: "ses_A"))
+        XCTAssertEqual(tracker.mainContextUsage(for: wsID)?.usedTokens, 42_000)
+
+        handle(.sessionSwitched(sessionID: "ses_B"))
+        XCTAssertNil(tracker.mainContextUsage(for: wsID))
+        XCTAssertTrue(tracker.runs(for: wsID).isEmpty)
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 5_000,
+            sessionID: "ses_B"
+        ))
+        XCTAssertEqual(tracker.mainContextUsage(for: wsID)?.usedTokens, 5_000)
+    }
+
+    /// A resumed session emits no session.created, so the first event
+    /// carrying an unknown session id must implicitly reset.
+    func testImplicitSwitchOnUnknownSessionID() {
+        handle(.waiting(agentId: "main", sessionID: "ses_A"))
+        handle(AgentEvent.info(
+            agentId: "main",
+            name: "OpenCode",
+            model: "claude-sonnet-4-5",
+            contextUsedTokens: 42_000,
+            sessionID: "ses_A"
+        ))
+        handle(.idle(agentId: "main", sessionID: "ses_A"))
+        XCTAssertEqual(tracker.mainContextUsage(for: wsID)?.usedTokens, 42_000)
+
+        handle(.waiting(agentId: "main", sessionID: "ses_B"))
+        XCTAssertNil(tracker.mainContextUsage(for: wsID))
+        XCTAssertEqual(tracker.runs(for: wsID).map(\.id), ["main"])
+    }
+
+    /// A late idle from a superseded session must not wipe the new
+    /// conversation's roster or row state.
+    func testStaleIdleAfterSwitchIsIgnored() {
+        tracker.currentSelection = wsID
+        handle(.waiting(agentId: "main", sessionID: "ses_A"))
+        handle(.sessionSwitched(sessionID: "ses_B"))
+        handle(.waiting(agentId: "main", sessionID: "ses_B"))
+
+        handle(.idle(agentId: "main", sessionID: "ses_A"))
+
+        XCTAssertEqual(tracker.runs(for: wsID).map(\.id), ["main"])
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    /// A different Claude transcript path mid-stream means another Claude
+    /// session in the same worktree: the old snapshot is dropped instead of
+    /// letting interleaved reads flicker the meter.
+    func testClaudeTranscriptChangeResetsSnapshot() throws {
+        let urlA = tempTranscriptURL()
+        let urlB = tempTranscriptURL()
+        defer {
+            try? FileManager.default.removeItem(at: urlA)
+            try? FileManager.default.removeItem(at: urlB)
+        }
+        try writeTranscript(url: urlA, usedTokens: 100)
+        try writeTranscript(url: urlB, usedTokens: 9_000)
+
+        handle(.waiting(agentId: "main", transcriptPath: urlA.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 100)
+
+        // A different transcript path means another Claude session in the
+        // same worktree: the old snapshot is dropped (and the read throttle
+        // cleared, so the new file is read immediately, not throttled).
+        handle(.waiting(agentId: "main", transcriptPath: urlB.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 9_000)
+    }
+
+    // MARK: - Question tool
+
+    func testQuestionToolMapsToAskingActivity() {
+        XCTAssertEqual(
+            HookEventReceiver.activityDescription(toolName: "question", toolInput: nil),
+            NSLocalizedString("Asking question", comment: "")
+        )
+        XCTAssertEqual(
+            HookEventReceiver.activityDescription(toolName: "Question", toolInput: nil),
+            NSLocalizedString("Asking question", comment: "")
+        )
+    }
+
+    /// The question-tool permission signal must keep the row out of the
+    /// stall sweep, like any other permission prompt.
+    func testQuestionPermissionSkipsStallSweep() {
+        tracker.currentSelection = wsID
+        handle(.toolStart(agentId: "main", tool: "question", activity: "Asking question"))
+        handle(.status(agentId: "main", status: "permissionRequired"))
+        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+
+        tracker.sweepForStalls(now: Date())
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .working)
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
+    }
 }

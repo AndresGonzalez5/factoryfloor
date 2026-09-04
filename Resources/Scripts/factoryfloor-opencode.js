@@ -64,6 +64,44 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
   const pendingTaskQueue = []
   // Dedup guard for assistant info events: agent_id -> "name|model|contextUsed"
   const lastInfo = new Map()
+  // Tool-event dedupe between the two delivery paths below: the direct
+  // "tool.execute.before/after" hooks are the confirmed primary (tool.* bus
+  // events do not arrive through `event:` in current CLI versions). If a
+  // future version delivers through both, the bus-path send is dropped when
+  // the direct hook already reported the same call — otherwise every tool
+  // would double-fire and mask real stalls via lastEventAt refreshes.
+  const recentDirectToolSends = new Map() // windowKey -> timestamp ms
+  const seenToolCallIDs = new Set()
+  const TOOL_BUS_DEDUPE_WINDOW_MS = 1000
+
+  function toolWindowKey(kind, aid, tool, sessionID) {
+    return `${kind}|${aid}|${tool}|${sessionID || ""}`
+  }
+
+  function noteDirectToolSend(kind, aid, tool, sessionID, callID) {
+    if (callID) {
+      seenToolCallIDs.add(`${kind}|${callID}`)
+      if (seenToolCallIDs.size > 500) {
+        const first = seenToolCallIDs.values().next().value
+        seenToolCallIDs.delete(first)
+      }
+    }
+    recentDirectToolSends.set(toolWindowKey(kind, aid, tool, sessionID), Date.now())
+    if (recentDirectToolSends.size > 200) {
+      const now = Date.now()
+      for (const [k, t] of recentDirectToolSends) {
+        if (now - t > 5000) recentDirectToolSends.delete(k)
+        if (recentDirectToolSends.size <= 200) break
+      }
+    }
+  }
+
+  // True when the bus-path tool event duplicates a direct-hook report.
+  function isDuplicateBusToolEvent(kind, aid, tool, sessionID, callID) {
+    if (callID && seenToolCallIDs.has(`${kind}|${callID}`)) return true
+    const prev = recentDirectToolSends.get(toolWindowKey(kind, aid, tool, sessionID))
+    return prev !== undefined && Date.now() - prev < TOOL_BUS_DEDUPE_WINDOW_MS
+  }
 
   function cappedDescription(raw) {
     if (typeof raw !== "string") return ""
@@ -94,17 +132,29 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
     return active
   }
 
-  function adoptSession(id) {
+  function adoptSession(id, { switched = false } = {}) {
     if (!id || typeof id !== "string") return
     if (currentSession === id) return
     // Quick actions run in the same worktree; never repoint the resume
     // pointer at their forked sessions.
     if (quickActionActive()) return
+    const previous = currentSession
     currentSession = id
     try {
       mkdirSync(`${root}/${STATE_DIR}`, { recursive: true })
       writeFileSync(`${root}/${SESSION_FILE}`, id)
     } catch {}
+    // A new top-level session in the same worktree replaces the tracked
+    // conversation: tell the app to reset roster + context snapshot instead
+    // of conflating the two sessions' events. Skipped on first bind (no
+    // previous session to reset from).
+    if (switched && previous) {
+      void send({
+        kind: "session_switched",
+        session_id: id,
+        previous_session_id: previous,
+      })
+    }
   }
 
   function isChild(sessionID) {
@@ -170,6 +220,19 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
     return { tool, filePath }
   }
 
+  function extractCallID(properties) {
+    const p = properties || {}
+    return (
+      p.callID ||
+      p.callId ||
+      p.call?.id ||
+      p.call?.callID ||
+      p.toolCallID ||
+      p.toolCallId ||
+      null
+    )
+  }
+
   /// Registers a child session so later events carry its real agent name.
   function registerChild(sessionID, agentName) {
     if (!sessionID || !agentName) return false
@@ -186,6 +249,8 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
         case "tool.execute.before": {
           const { tool, filePath } = extractToolInfo(properties)
           const sessionID = extractSessionID(properties)
+          const callID = extractCallID(properties)
+          const aid = agentIdFor(sessionID)
           // Capture task-tool descriptions for fallback when subtask parts
           // arrive without a description or before currentSession is known.
           if (tool === "task") {
@@ -194,22 +259,38 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
               rawArgs.description || rawArgs.Description || rawArgs.desc || null
             queueTaskDescription(taskDesc)
           }
+          if (isDuplicateBusToolEvent("tool_start", aid, tool, sessionID, callID)) break
           await send({
             kind: "tool_start",
             tool,
             file_path: filePath || undefined,
-            agent_id: agentIdFor(sessionID),
+            agent_id: aid,
             name: displayNameFor(sessionID),
+            session_id: sessionID || undefined,
           })
+          // The `question` tool blocks mid-turn on the user's answer without
+          // ending the session and without a dedicated bus event; surface it
+          // as user-waiting so the row doesn't sit on "Working" then stall.
+          if (tool === "question") {
+            await send({
+              kind: "permission_required",
+              agent_id: aid,
+              session_id: sessionID || undefined,
+            })
+          }
           break
         }
         case "tool.execute.after": {
           const sessionID = extractSessionID(properties)
+          const callID = extractCallID(properties)
+          const aid = agentIdFor(sessionID)
+          if (isDuplicateBusToolEvent("tool_done", aid, properties.tool || "unknown", sessionID, callID)) break
           await send({
             kind: "tool_done",
             tool: properties.tool || "unknown",
-            agent_id: agentIdFor(sessionID),
+            agent_id: aid,
             name: displayNameFor(sessionID),
+            session_id: sessionID || undefined,
           })
           break
         }
@@ -230,7 +311,10 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             }
             // Context grows across a turn; keep it in the fingerprint so
             // refreshed totals flow through despite identical name/model.
-            const fingerprint = `${name}|${model}|${contextUsed}`
+            // Keyed per agent AND session so a new session in the same
+            // worktree doesn't inherit the previous session's fingerprint
+            // and drop its first totals.
+            const fingerprint = `${sessionID || ""}|${name}|${model}|${contextUsed}`
             if (lastInfo.get(aid) !== fingerprint) {
               lastInfo.set(aid, fingerprint)
               await send({
@@ -238,6 +322,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
                 agent_id: aid,
                 name,
                 model: model || undefined,
+                session_id: sessionID || undefined,
                 ...(contextUsed > 0 ? { context_used: contextUsed } : {}),
               })
             }
@@ -293,11 +378,19 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             kind: "working",
             agent_id: agentIdFor(sessionID),
             name: displayNameFor(sessionID),
+            session_id: sessionID || undefined,
           })
           break
         }
         case "permission.asked": {
-          await send({ kind: "permission_required" })
+          // Attribute to the requesting session instead of assuming main so
+          // a subagent's permission prompt doesn't mislabel the main row.
+          const sessionID = extractSessionID(properties)
+          await send({
+            kind: "permission_required",
+            agent_id: agentIdFor(sessionID),
+            session_id: sessionID || undefined,
+          })
           break
         }
         case "permission.replied": {
@@ -306,13 +399,22 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             kind: "working",
             agent_id: agentIdFor(sessionID),
             name: displayNameFor(sessionID),
+            session_id: sessionID || undefined,
           })
           break
         }
         case "question.asked": {
           // The question tool blocks mid-turn without ending the session;
           // without this signal the row would keep pulsing "Working".
-          await send({ kind: "permission_required" })
+          // (No dedicated question bus event exists in current CLI versions,
+          // so the tool.execute.before question-tool path above is the
+          // primary signal; this stays as a fallback.)
+          const sessionID = extractSessionID(properties)
+          await send({
+            kind: "permission_required",
+            agent_id: agentIdFor(sessionID),
+            session_id: sessionID || undefined,
+          })
           break
         }
         case "question.replied":
@@ -322,6 +424,7 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
             kind: "working",
             agent_id: agentIdFor(sessionID),
             name: displayNameFor(sessionID),
+            session_id: sessionID || undefined,
           })
           break
         }
@@ -333,15 +436,24 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
               kind: "working",
               agent_id: agentIdFor(sessionID),
               name: displayNameFor(sessionID),
+              session_id: sessionID || undefined,
             })
           } else if (status === "idle") {
-            await send({ kind: "idle", agent_id: agentIdFor(sessionID) })
+            await send({
+              kind: "idle",
+              agent_id: agentIdFor(sessionID),
+              session_id: sessionID || undefined,
+            })
           }
           break
         }
         case "session.idle": {
           const sessionID = extractSessionID(properties)
-          await send({ kind: "idle", agent_id: agentIdFor(sessionID) })
+          await send({
+            kind: "idle",
+            agent_id: agentIdFor(sessionID),
+            session_id: sessionID || undefined,
+          })
           break
         }
         case "session.created": {
@@ -369,7 +481,10 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
               ...(desc ? { description: desc } : {}),
             })
           } else if (id) {
-            adoptSession(id)
+            // A fresh top-level session replaces the tracked conversation
+            // (e.g. /new in the TUI). Resumed sessions emit no
+            // session.created, so any new id here is a genuine switch.
+            adoptSession(id, { switched: true })
           }
           break
         }
@@ -380,10 +495,18 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
 
     "chat.message": async (input, output) => {
       const inputSession = input?.sessionID || output?.message?.sessionID
-      if (!currentSession && inputSession) adoptSession(inputSession)
+      // Resumed sessions emit no session.created, so the first user message
+      // is the earliest bind signal. A message on an already-bound but
+      // different session means the user switched (e.g. resumed another
+      // session in the same worktree): reset, don't conflate.
+      if (inputSession && currentSession && inputSession !== currentSession) {
+        adoptSession(inputSession, { switched: true })
+      } else if (!currentSession && inputSession) {
+        adoptSession(inputSession)
+      }
 
       if (!quickActionActive()) {
-        await send({ kind: "waiting", agent_id: "main", name: "OpenCode" })
+        await send({ kind: "waiting", agent_id: "main", name: "OpenCode", session_id: inputSession || undefined })
       }
 
       try {
@@ -396,8 +519,13 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
 
     // Blocking permission hook — fires even when the permission.asked bus
     // event is unavailable in a given CLI version.
-    "permission.ask": async () => {
-      await send({ kind: "permission_required" })
+    "permission.ask": async (input) => {
+      const sessionID = input?.sessionID || input?.session_id || null
+      await send({
+        kind: "permission_required",
+        agent_id: agentIdFor(sessionID),
+        session_id: sessionID || undefined,
+      })
     },
 
     // Tool execution HOOKS — OpenCode triggers these around every tool run;
@@ -409,25 +537,46 @@ export const FactoryFloorPlugin = async ({ project, client, $, directory, worktr
       const args = output?.args || {}
       const filePath =
         args.filePath || args.file_path || args.path || args.notebook_path || args.notebookPath || null
-      if (input?.tool === "task") {
+      const tool = input?.tool || "unknown"
+      const sessionID = input?.sessionID || null
+      const callID = input?.callID || input?.callId || input?.toolCallID || input?.id || null
+      const aid = agentIdFor(sessionID)
+      if (tool === "task") {
         const taskDesc = args.description || args.Description || args.desc || null
         queueTaskDescription(taskDesc)
       }
+      noteDirectToolSend("tool_start", aid, tool, sessionID, callID)
       void send({
         kind: "tool_start",
-        tool: input?.tool || "unknown",
+        tool,
         file_path: filePath || undefined,
-        agent_id: agentIdFor(input?.sessionID),
-        name: displayNameFor(input?.sessionID),
+        agent_id: aid,
+        name: displayNameFor(sessionID),
+        session_id: sessionID || undefined,
       })
+      // Primary question-tool signal: no dedicated question bus event exists
+      // in current CLI versions (see the tool.execute.before bus case, which
+      // mirrors this as a fallback if delivery ever moves to the bus).
+      if (tool === "question") {
+        void send({
+          kind: "permission_required",
+          agent_id: aid,
+          session_id: sessionID || undefined,
+        })
+      }
     },
     "tool.execute.after": (input) => {
       const sessionID = input?.sessionID
+      const tool = input?.tool || "unknown"
+      const callID = input?.callID || input?.callId || input?.toolCallID || input?.id || null
+      const aid = agentIdFor(sessionID)
+      noteDirectToolSend("tool_done", aid, tool, sessionID, callID)
       void send({
         kind: "tool_done",
-        tool: input?.tool || "unknown",
-        agent_id: agentIdFor(sessionID),
+        tool,
+        agent_id: aid,
         name: displayNameFor(sessionID),
+        session_id: sessionID || undefined,
       })
     },
   }
