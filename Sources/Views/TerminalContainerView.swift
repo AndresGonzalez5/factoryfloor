@@ -783,6 +783,7 @@ struct TerminalContainerView: View {
         case .changes:
             if let bridge = diffBridge {
                 ChangesView(
+                    workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
                     projectDirectory: projectDirectory,
                     bridge: bridge

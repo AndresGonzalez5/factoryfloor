@@ -292,6 +292,13 @@
 "Refresh changes" = "Uppdatera ändringar";
 "Binary file (not shown)" = "Binärfil (visas inte)";
 "Large file — %d changes, click to load" = "Stor fil — %d ändringar, klicka för att läsa in";
+"%d of %d viewed" = "%d av %d granskade";
+"Collapse all files" = "Fäll ihop alla filer";
+"Expand all files" = "Fäll ut alla filer";
+"Collapse file" = "Fäll ihop filen";
+"Expand file" = "Fäll ut filen";
+"Mark as viewed" = "Markera som granskad";
+"Viewed" = "Granskad";
 
 /* Changes sidebar - Files changed tree */
 "Files changed" = "Ändrade filer";

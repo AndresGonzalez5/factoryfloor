@@ -291,6 +291,13 @@
 "Refresh changes" = "Änderungen aktualisieren";
 "Binary file (not shown)" = "Binärdatei (nicht angezeigt)";
 "Large file — %d changes, click to load" = "Große Datei — %d Änderungen, zum Laden klicken";
+"%d of %d viewed" = "%d von %d geprüft";
+"Collapse all files" = "Alle Dateien einklappen";
+"Expand all files" = "Alle Dateien ausklappen";
+"Collapse file" = "Datei einklappen";
+"Expand file" = "Datei ausklappen";
+"Mark as viewed" = "Als geprüft markieren";
+"Viewed" = "Geprüft";
 
 /* Changes sidebar - Files changed tree */
 "Files changed" = "Geänderte Dateien";

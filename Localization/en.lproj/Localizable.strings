@@ -292,6 +292,13 @@
 "Refresh changes" = "Refresh changes";
 "Binary file (not shown)" = "Binary file (not shown)";
 "Large file — %d changes, click to load" = "Large file — %d changes, click to load";
+"%d of %d viewed" = "%d of %d viewed";
+"Collapse all files" = "Collapse all files";
+"Expand all files" = "Expand all files";
+"Collapse file" = "Collapse file";
+"Expand file" = "Expand file";
+"Mark as viewed" = "Mark as viewed";
+"Viewed" = "Viewed";
 
 /* Changes sidebar - Files changed tree */
 "Files changed" = "Files changed";
