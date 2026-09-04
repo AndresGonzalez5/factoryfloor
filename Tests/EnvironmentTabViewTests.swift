@@ -52,4 +52,68 @@ final class EnvironmentTabViewTests: XCTestCase {
         XCTAssertTrue(command.contains("/bin/zsh -lic"))
         XCTAssertFalse(command.contains("/bin/sh"))
     }
+
+    // MARK: - Display status (flag reconciled with live port state)
+
+    func testDisplayStatusIdleWhenNeverStarted() {
+        XCTAssertEqual(
+            RunDisplayStatus.resolve(runStarted: false, runCommand: nil, portStatus: .none, selectedPort: nil, isWaiting: false),
+            .idle
+        )
+    }
+
+    func testDisplayStatusRunningWithPort() {
+        XCTAssertEqual(
+            RunDisplayStatus.resolve(runStarted: true, runCommand: "npm run dev", portStatus: .running, selectedPort: 5173, isWaiting: false),
+            .running(port: 5173)
+        )
+    }
+
+    func testDisplayStatusStartingWhileNoPort() {
+        XCTAssertEqual(
+            RunDisplayStatus.resolve(runStarted: true, runCommand: "npm run dev", portStatus: .starting, selectedPort: nil, isWaiting: false),
+            .starting
+        )
+    }
+
+    func testDisplayStatusStartingWhileWaiting() {
+        XCTAssertEqual(
+            RunDisplayStatus.resolve(runStarted: true, runCommand: "npm run dev", portStatus: .none, selectedPort: nil, isWaiting: true),
+            .starting
+        )
+    }
+
+    func testDisplayStatusStaleWhenFlagWithoutSession() {
+        // The phantom Stop/Rerun case: flag set, no live session, not booting.
+        XCTAssertEqual(
+            RunDisplayStatus.resolve(runStarted: true, runCommand: "npm run dev", portStatus: .none, selectedPort: nil, isWaiting: false),
+            .stale
+        )
+    }
+
+    func testDisplayStatusStaleWhenCommandMissing() {
+        XCTAssertEqual(
+            RunDisplayStatus.resolve(runStarted: true, runCommand: nil, portStatus: .running, selectedPort: 5173, isWaiting: false),
+            .stale
+        )
+    }
+
+    // MARK: - Port references in dev commands
+
+    func testDevCommandReferencesPortDetectsFFPORT() {
+        XCTAssertTrue(devCommandReferencesPort("vite --port $FF_PORT --strictPort"))
+        XCTAssertTrue(devCommandReferencesPort("next dev -p ${FF_PORT}"))
+    }
+
+    func testDevCommandReferencesPortDetectsExplicitFlags() {
+        XCTAssertTrue(devCommandReferencesPort("vite --port 5173"))
+        XCTAssertTrue(devCommandReferencesPort("next dev -p 3000"))
+        XCTAssertTrue(devCommandReferencesPort("next dev -p3000"))
+    }
+
+    func testDevCommandReferencesPortRejectsBareCommands() {
+        XCTAssertFalse(devCommandReferencesPort("npm run dev"))
+        XCTAssertFalse(devCommandReferencesPort("bun run dev"))
+        XCTAssertFalse(devCommandReferencesPort("make serve"))
+    }
 }

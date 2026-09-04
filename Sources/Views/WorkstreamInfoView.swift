@@ -20,6 +20,13 @@ struct WorkstreamInfoView: View {
     @Binding var runStarted: Bool
     @Binding var scriptsApproved: Bool
     @Binding var runGeneration: Int
+    /// Who started the server (drives the stays-alive hint).
+    @Binding var runOwner: RunOwner
+    /// Live port state from the container's PortDetector.
+    var selectedPort: Int? = nil
+    var portStatus: PortStatus = .none
+    var expectedPort: Int? = nil
+    var isWaitingForServer: Bool = false
     var sessionMode: TerminalSessionMode = .standard
     var onStart: () -> Void = {}
     var onStop: () -> Void = {}
@@ -251,6 +258,11 @@ struct WorkstreamInfoView: View {
                         runStarted: $runStarted,
                         scriptsApproved: $scriptsApproved,
                         runGeneration: $runGeneration,
+                        runOwner: $runOwner,
+                        selectedPort: selectedPort,
+                        portStatus: portStatus,
+                        expectedPort: expectedPort,
+                        isWaitingForServer: isWaitingForServer,
                         onStart: onStart,
                         onStop: onStop,
                         onRestart: onRestart

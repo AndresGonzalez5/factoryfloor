@@ -102,6 +102,30 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
         XCTAssertFalse(reconciled.runStoppedManually)
     }
 
+    func testReconciledPreservesRunGenerationAndOwner() {
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.info, .agent],
+            terminalCount: 0,
+            browserCount: 0,
+            editorCount: 0,
+            activeTab: .agent,
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: true,
+            runStoppedManually: false,
+            runGeneration: 4,
+            runOwner: .info
+        )
+
+        let reconciled = snapshot.reconciled(liveSurfaceIDs: [])
+
+        // The generation must survive workspace switches so the rebuilt run
+        // command addresses the same surface as the live session.
+        XCTAssertEqual(reconciled.runGeneration, 4)
+        XCTAssertEqual(reconciled.runOwner, .info)
+    }
+
     func testReconcileKeepsBrowserTabsRegardlessOfSurfaces() {
         let browserID = UUID()
 

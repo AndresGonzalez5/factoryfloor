@@ -279,6 +279,19 @@
 "No dev command found. Add a dev script to package.json or set one below." = "Inget dev-kommando hittades. Lägg till ett dev-skript i package.json eller ange ett nedan.";
 "Press ⌘B to start the dev server and open a browser tab." = "Tryck på ⌘B för att starta utvecklingsservern och öppna en webbläsarflik.";
 
+/* Dev server status */
+"Running" = "Körs";
+"Running on localhost:%@" = "Körs på localhost:%@";
+"Starting…" = "Startar…";
+"Stopped unexpectedly" = "Stoppades oväntat";
+"Stopped unexpectedly. Press Start to run it again." = "Stoppades oväntat. Tryck på Start för att köra igen.";
+"Stays running after browser tabs close" = "Fortsätter köras när webbläsarflikarna stängs";
+"Stops when the last browser tab closes" = "Stoppas när den sista webbläsarfliken stängs";
+"Using port %@ instead of %@. The dev command may ignore $FF_PORT; a leftover server may still hold the expected port." = "Använder port %@ i stället för %@. Kommandot ignorerar kanske $FF_PORT; en gammal server kan fortfarande uppta den förväntade porten.";
+"Tip: make your dev command listen on $FF_PORT to keep the port stable." = "Tips: låt ditt dev-kommando lyssna på $FF_PORT för att hålla porten stabil.";
+"Dev server moved to %@" = "Utvecklingsservern har flyttats till %@";
+"Switch" = "Byt";
+
 /* Tab labels */
 "Info" = "Info";
 "Agent" = "Agent";

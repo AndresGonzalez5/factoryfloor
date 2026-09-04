@@ -745,9 +745,14 @@ struct ProjectSidebar: View {
 
     private func deleteProject(id: UUID) {
         if let project = projects.first(where: { $0.id == id }) {
+            let tmuxPath = appEnv.toolStatus.tmux.path
             for ws in project.workstreams {
                 surfaceCache.removeWorkstreamSurfaces(for: ws.id)
                 agentStateTracker.clear(workstreamID: ws.id)
+                let wsID = ws.id, projName = project.name, wsName = ws.name
+                Task.detached {
+                    WorkstreamArchiver.killRunProcesses(workstreamID: wsID, tmuxPath: tmuxPath, project: projName, workstream: wsName)
+                }
             }
         }
         projects.removeAll { $0.id == id }

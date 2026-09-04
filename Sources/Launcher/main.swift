@@ -40,6 +40,7 @@ private func launchCommand(configuration: Configuration) throws {
         "--monitor",
         "--pid", "\(commandPID)",
         "--workstream-id", configuration.workstreamID.uuidString.lowercased(),
+        "--generation", "\(configuration.generation)",
     ]
     var monitorPID: pid_t = 0
     let argv = monitorArgs.map { strdup($0) } + [nil]
@@ -88,7 +89,7 @@ private func runMonitor(configuration: Configuration) -> Never {
     )
 
     let scanner = PortScanner(pid: commandPID, expectedPort: configuration.expectedPort)
-    scanner.start(startedAt: configuration.startedAt, workstreamID: configuration.workstreamID)
+    scanner.start(startedAt: configuration.startedAt, workstreamID: configuration.workstreamID, generation: configuration.generation)
 
     // Poll until the command process exits.
     while kill(commandPID, 0) == 0 {
@@ -104,7 +105,10 @@ private func runMonitor(configuration: Configuration) -> Never {
         detectedPorts: scanner.detectedPorts,
         selectedPort: scanner.selectedPort
     )
-    RunStateStore.remove(for: configuration.workstreamID)
+    // Only remove the file when it still belongs to this generation: a
+    // rapid stop -> start reuses the same path, and deleting the new
+    // server's fresh state would orphan the UI in "not running".
+    RunStateStore.removeIfGenerationMatches(configuration.generation, for: configuration.workstreamID)
     exit(0)
 }
 
@@ -114,7 +118,8 @@ private func writeState(configuration: Configuration, pid: Int32, status: RunSta
         status: status,
         detectedPorts: detectedPorts.sorted(),
         selectedPort: selectedPort,
-        startedAt: configuration.startedAt
+        startedAt: configuration.startedAt,
+        generation: configuration.generation
     )
     try? RunStateStore.write(state, for: configuration.workstreamID)
 }
@@ -130,13 +135,17 @@ private final class PortScanner: @unchecked Sendable {
     private(set) var selectedPort: Int?
     private var pollCount = 0
     private var active = false
+    /// Set once a port is selected. Polling continues at a low cadence so
+    /// later port changes (or a vanished port) still reach the state file
+    /// instead of freezing the UI on a stale selection.
+    private var locked = false
 
     init(pid: Int32, expectedPort: Int?) {
         self.pid = pid
         tracker = PortSelectionTracker(expectedPort: expectedPort)
     }
 
-    func start(startedAt: Date, workstreamID: UUID) {
+    func start(startedAt: Date, workstreamID: UUID, generation: Int) {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         self.timer = timer
         timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
@@ -155,13 +164,15 @@ private final class PortScanner: @unchecked Sendable {
                 status: status,
                 detectedPorts: result.detectedPorts,
                 selectedPort: result.selectedPort,
-                startedAt: startedAt
+                startedAt: startedAt,
+                generation: generation
             )
             try? RunStateStore.write(state, for: workstreamID)
 
-            if result.selectedPort != nil {
-                self.active = false
-                timer.cancel()
+            if result.selectedPort != nil, !self.locked {
+                // Port is stable: keep watching for changes, but cheaply.
+                self.locked = true
+                timer.schedule(deadline: .now() + .seconds(5), repeating: .seconds(5))
                 return
             }
 
@@ -261,12 +272,14 @@ private struct Configuration {
     let startedAt: Date
     let monitorMode: Bool
     let monitorPID: Int32?
+    let generation: Int
 
     init(arguments: [String]) throws {
         var workstreamID: UUID?
         var commandStartIndex: Int?
         var monitorMode = false
         var monitorPID: Int32?
+        var generation = 0
         var index = 1
 
         while index < arguments.count {
@@ -278,6 +291,17 @@ private struct Configuration {
             if argument == "--monitor" {
                 monitorMode = true
                 index += 1
+                continue
+            }
+            if argument == "--generation" {
+                let valueIndex = index + 1
+                guard valueIndex < arguments.count,
+                      let parsed = Int(arguments[valueIndex])
+                else {
+                    throw LauncherError(exitCode: 2, message: "ff-run --generation requires an integer")
+                }
+                generation = parsed
+                index += 2
                 continue
             }
             if argument == "--pid" {
@@ -312,6 +336,7 @@ private struct Configuration {
         self.monitorMode = monitorMode
         self.monitorPID = monitorPID
         self.workstreamID = workstreamID
+        self.generation = generation
         expectedPort = ProcessInfo.processInfo.environment["FF_PORT"].flatMap(Int.init)
         startedAt = Date()
 

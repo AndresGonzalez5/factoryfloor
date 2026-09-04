@@ -30,6 +30,28 @@ func shouldRetargetBrowser(currentURL: String?, displayedURL: String, previousDe
     return normalizedBrowserURL(currentURL) == normalizedBrowserURL(previousDefaultURL)
 }
 
+/// URL for the "server moved" banner: when the dev server's port changes
+/// but the tab deliberately was *not* auto-retargeted (the user navigated
+/// elsewhere), surface the new URL instead of leaving the tab on a dead
+/// port with no affordance. Returns nil when an auto-retarget applies, when
+/// the tab already shows the new URL, or while the server is still starting.
+func pendingRetargetURL(currentURL: String?, displayedURL: String, previousDefaultURL: String, nextDefaultURL: String, connectionError: Bool, isWaitingForServer: Bool) -> String? {
+    guard !isWaitingForServer else { return nil }
+    guard normalizedBrowserURL(previousDefaultURL) != normalizedBrowserURL(nextDefaultURL) else { return nil }
+    if shouldRetargetBrowser(
+        currentURL: currentURL,
+        displayedURL: displayedURL,
+        previousDefaultURL: previousDefaultURL,
+        nextDefaultURL: nextDefaultURL,
+        connectionError: connectionError
+    ) {
+        return nil
+    }
+    let current = normalizedBrowserURL(currentURL ?? displayedURL)
+    guard current != normalizedBrowserURL(nextDefaultURL) else { return nil }
+    return nextDefaultURL
+}
+
 private func normalizedBrowserURL(_ urlString: String) -> String {
     var resolved = urlString
     if !resolved.contains("://") {
@@ -58,6 +80,7 @@ struct BrowserView: View {
     @State private var canGoForward = false
     @State private var connectionError = false
     @State private var pageTitle: String?
+    @State private var movedURL: String?
     @FocusState private var urlFieldFocused: Bool
 
     var body: some View {
@@ -107,6 +130,29 @@ struct BrowserView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(.bar)
+
+            if let movedURL {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.blue)
+                    Text(String(format: NSLocalizedString("Dev server moved to %@", comment: ""), movedURL))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("Switch") {
+                        self.movedURL = nil
+                        urlText = movedURL
+                        navigateTo(movedURL)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.blue.opacity(0.08))
+            }
 
             // Loading indicator
             if isLoading {
@@ -179,6 +225,14 @@ struct BrowserView: View {
             urlFieldFocused = true
         }
         .onChange(of: defaultURL) { oldURL, newURL in
+            movedURL = pendingRetargetURL(
+                currentURL: webView.url?.absoluteString,
+                displayedURL: urlText,
+                previousDefaultURL: oldURL,
+                nextDefaultURL: newURL,
+                connectionError: connectionError,
+                isWaitingForServer: isWaitingForServer
+            )
             guard !isWaitingForServer else { return }
             guard shouldRetargetBrowser(
                 currentURL: webView.url?.absoluteString,
@@ -187,6 +241,7 @@ struct BrowserView: View {
                 nextDefaultURL: newURL,
                 connectionError: connectionError
             ) else { return }
+            movedURL = nil
             urlText = newURL
             navigateTo(newURL)
         }
@@ -207,6 +262,9 @@ struct BrowserView: View {
 
     private func navigateTo(_ urlString: String) {
         connectionError = false
+        if normalizedBrowserURL(urlString) == normalizedBrowserURL(defaultURL) {
+            movedURL = nil
+        }
         var resolved = urlString
         if !resolved.contains("://") {
             resolved = "http://\(resolved)"

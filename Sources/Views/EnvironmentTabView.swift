@@ -17,6 +17,44 @@ func scriptCommand(script: String, role: String, shell: String = CommandBuilder.
     return "\(shell) -lic \(CommandBuilder.shellQuote(inner, forShell: shell))"
 }
 
+/// Derived dev-server status combining the container's `runStarted` flag
+/// with the live `PortDetector` state. Previously the panel showed Stop/Rerun
+/// (from `runStarted`) over an idle Start button whenever the two disagreed
+/// after a workspace switch or a crash — both now derive from one value.
+enum RunDisplayStatus: Equatable {
+    case idle
+    case starting
+    case running(port: Int?)
+    case stale
+
+    static func resolve(runStarted: Bool, runCommand: String?, portStatus: PortStatus, selectedPort: Int?, isWaiting: Bool) -> RunDisplayStatus {
+        guard runStarted, runCommand != nil else {
+            // Flag set but no assembled command (or never started).
+            return runStarted ? .stale : .idle
+        }
+        switch portStatus {
+        case .running:
+            return .running(port: selectedPort)
+        case .starting:
+            return .starting
+        case .none:
+            return isWaiting ? .starting : .stale
+        }
+    }
+}
+
+/// Whether the command pins a port. When it does not reference `$FF_PORT`
+/// (or any explicit port flag), frameworks fall back to their default port
+/// and auto-bump when the old server is still alive — the 8080 -> 8081 creep.
+func devCommandReferencesPort(_ command: String) -> Bool {
+    if command.contains("FF_PORT") { return true }
+    if command.contains("--port") { return true }
+    // Match `-p <number>` / `-p<number>` as a standalone flag.
+    let pattern = #"(^|\s)-p\s*\d+"#
+    if command.range(of: pattern, options: .regularExpression) != nil { return true }
+    return false
+}
+
 struct EnvironmentTabView: View {
     let workstreamID: UUID
     let workingDirectory: String
@@ -37,6 +75,13 @@ struct EnvironmentTabView: View {
     @Binding var runStarted: Bool
     @Binding var scriptsApproved: Bool
     @Binding var runGeneration: Int
+    /// Who started the server (drives the stays-alive hint).
+    @Binding var runOwner: RunOwner
+    /// Live port state from the container's PortDetector.
+    var selectedPort: Int? = nil
+    var portStatus: PortStatus = .none
+    var expectedPort: Int? = nil
+    var isWaitingForServer: Bool = false
     let onStart: () -> Void
     let onStop: () -> Void
     let onRestart: () -> Void
@@ -53,6 +98,29 @@ struct EnvironmentTabView: View {
     /// The short, human-readable command this pane would run.
     private var runCommandPreference: String? {
         scriptConfig.run ?? devCommand?.command
+    }
+
+    /// Single source of truth for what the panel shows: the container's
+    /// `runStarted` flag reconciled with the live port state. The header
+    /// buttons and the body below both derive from this, so they can never
+    /// disagree (Stop/Rerun over an idle Start button).
+    private var displayStatus: RunDisplayStatus {
+        .resolve(
+            runStarted: runStarted,
+            runCommand: runCommand,
+            portStatus: portStatus,
+            selectedPort: selectedPort,
+            isWaiting: isWaitingForServer
+        )
+    }
+
+    /// Stop/Rerun only make sense while a session exists or is coming up.
+    /// A stale flag (dead server) offers Start instead.
+    private var showsStopControls: Bool {
+        switch displayStatus {
+        case .starting, .running: return true
+        case .idle, .stale: return false
+        }
     }
 
     var body: some View {
@@ -86,7 +154,7 @@ struct EnvironmentTabView: View {
         let shortcut = "⌘⇧⏎"
         VStack(spacing: 0) {
             HStack {
-                if runControlsEnabled, !runStarted {
+                if runControlsEnabled, !showsStopControls {
                     Button(action: onStart) {
                         Image(systemName: "play.fill")
                             .font(.system(size: 11))
@@ -120,7 +188,7 @@ struct EnvironmentTabView: View {
                 Spacer()
 
                 if runControlsEnabled {
-                    if runStarted {
+                    if showsStopControls {
                         EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
                         EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
                     } else {
@@ -133,6 +201,16 @@ struct EnvironmentTabView: View {
             .background(.bar)
 
             Divider()
+
+            if runStarted {
+                runStatusRow
+                Divider()
+            }
+
+            if let warning = portMismatchWarning {
+                portWarningRow(warning)
+                Divider()
+            }
 
             if scriptConfig.run == nil {
                 devCommandSection
@@ -149,7 +227,7 @@ struct EnvironmentTabView: View {
                         onStart()
                     }
                 )
-            } else if runStarted, let runCommand {
+            } else if showsStopControls, let runCommand {
                 SingleTerminalView(
                     surfaceID: runID,
                     workingDirectory: workingDirectory,
@@ -158,6 +236,35 @@ struct EnvironmentTabView: View {
                     environmentVars: environmentVars
                 )
                 .id(runID)
+            } else if case .stale = displayStatus, runCommandPreference != nil {
+                // The server died outside the app (or never materialized):
+                // say so explicitly instead of an idle Start button under
+                // Stop/Rerun controls.
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                    Text("Stopped unexpectedly. Press Start to run it again.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button(action: onStart) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 14))
+                            Text("Start")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.accentColor)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
             } else if runCommandPreference != nil {
                 VStack(spacing: 12) {
                     Button(action: onStart) {
@@ -188,6 +295,89 @@ struct EnvironmentTabView: View {
                 scriptInstructions(title: title)
             }
         }
+    }
+
+    /// Shows the effective dev command (package.json auto-detection or the
+    /// user's per-workstream override) and lets the user customize it.
+    private var runStatusRow: some View {
+        HStack(spacing: 8) {
+            switch displayStatus {
+            case let .running(port):
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+                if let port {
+                    Text(String(format: NSLocalizedString("Running on localhost:%@", comment: ""), "\(port)"))
+                        .font(.system(size: 12, weight: .medium))
+                } else {
+                    Text(NSLocalizedString("Running", comment: ""))
+                        .font(.system(size: 12, weight: .medium))
+                }
+                Spacer()
+                Text(ownerHint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            case .starting:
+                ProgressView()
+                    .controlSize(.small)
+                Text(NSLocalizedString("Starting…", comment: ""))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            case .stale:
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
+                Text(NSLocalizedString("Stopped unexpectedly", comment: ""))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            case .idle:
+                EmptyView()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private var ownerHint: String {
+        switch runOwner {
+        case .info:
+            NSLocalizedString("Stays running after browser tabs close", comment: "")
+        case .browser:
+            NSLocalizedString("Stops when the last browser tab closes", comment: "")
+        case .none:
+            ""
+        }
+    }
+
+    /// Warns when the server listens on a different port than the workstream
+    /// was assigned. Usually means the dev command ignores `$FF_PORT` and the
+    /// framework fell back to its default (or auto-bumped because a leaked
+    /// server still holds the expected port).
+    private var portMismatchWarning: String? {
+        guard case let .running(port) = displayStatus,
+              let port, let expectedPort,
+              port != expectedPort
+        else { return nil }
+        return String(
+            format: NSLocalizedString("Using port %@ instead of %@. The dev command may ignore $FF_PORT; a leftover server may still hold the expected port.", comment: ""),
+            "\(port)", "\(expectedPort)"
+        )
+    }
+
+    private func portWarningRow(_ warning: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(warning)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.08))
     }
 
     /// Shows the effective dev command (package.json auto-detection or the
@@ -242,6 +432,12 @@ struct EnvironmentTabView: View {
 
             if devCommand == nil, !isCustomizingDevCommand {
                 Text("Press \u{2318}B to start the dev server and open a browser tab.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let command = devCommand?.command, !devCommandReferencesPort(command) {
+                Text("Tip: make your dev command listen on $FF_PORT to keep the port stable.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
@@ -332,9 +528,13 @@ struct EnvironmentTabView: View {
               let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
         let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
+        // tmux sessions linger with remain-on-exit, so a session alone does
+        // not prove the server is alive: require a validated live state too.
+        guard hasExistingRunSession, RunStateStore.loadValidated(for: workstreamID) != nil else { return }
         // Dev commands (package.json / override) are never gated.
         let approved = runCommandIsGated ? scriptsApproved : true
         if shouldRestoreRunSession(useTmux: useTmux, hasRunScript: runCommandPreference != nil, hasExistingRunSession: hasExistingRunSession, wasStoppedManually: runStoppedManually, isApproved: approved) {
+            runOwner = .info
             runStarted = true
         }
     }
