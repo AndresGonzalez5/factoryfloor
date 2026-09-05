@@ -1,7 +1,10 @@
 import { monaco, configService, postToSwift } from './shared-init.js'
 
 // --- Diff API ---
-// Renders a vertical stack of inline diff editors, one per file. Editors are
+// Renders a vertical stack of inline diff editors, one per file. Swift sends
+// metadata-only shells first (headers + placeholders paint synchronously),
+// then streams each normal file's texts via loadFileContent, which upgrades
+// its skeleton in place. Editors are
 // LAZY-mounted: headers + placeholders for every file are built synchronously
 // (cheap DOM), while real Monaco editors mount only when their section nears
 // the viewport (IntersectionObserver) and unmount when scrolled far away.
@@ -48,7 +51,8 @@ const STR = {
 // Active sections keyed by file path:
 // { section, host, editor, original, modified, file, mountable, mounted,
 //   diffFired, collapsed, gen, dirty, cleanVersionId, contentListener,
-//   contentSizeListener, syncEditUI }
+//   contentSizeListener, syncEditUI, pendingBody, deferredNote, loadingRequested,
+//   collapseBody, headerEl, viewedBox, syncChevron }
 const sections = new Map()
 // Path of the last-focused modified editor (sticky: updated on focus, never
 // cleared on blur) so Cmd+S can save the file being typed in without a click.
@@ -412,8 +416,10 @@ function makeHeader(file, entry) {
 
   // Inline-edit controls (VS Code Source Control style). Only for editable
   // files with loaded content — deleted/binary/deferred placeholders never
-  // get them here. Deferred files get them on upgrade (see loadFileContent).
-  if (isEditCapable(file) && !file.deferred) {
+  // get them here. Deferred files get them on upgrade (see loadFileContent),
+  // and so do pending shells once their streamed bodies arrive: adding them
+  // earlier would let Save persist the empty shell text over the real file.
+  if (isEditCapable(file) && !file.deferred && !file.pending) {
     addEditControls(header, file, entry, null)
   }
 
@@ -628,6 +634,23 @@ window.diffAPI = {
         continue
       }
 
+      // Pending shells (shells-first transport): bodies stream in via
+      // loadFileContent right after first paint. A textless shimmer block at
+      // the estimated height — never observed, never clickable — upgraded by
+      // the shared deferred path on delivery.
+      if (file.pending) {
+        const note = document.createElement('div')
+        note.className = 'placeholder placeholder-pending'
+        note.dataset.filePath = file.filePath
+        note.style.minHeight = `${estimateEditorHeight(file)}px`
+        section.appendChild(note)
+        entry.collapseBody = note
+        entry.pendingBody = true
+        container.appendChild(section)
+        sections.set(file.filePath, entry)
+        continue
+      }
+
       const host = makePlaceholderHost(entry, file)
       section.appendChild(host)
       entry.collapseBody = host
@@ -692,8 +715,9 @@ window.diffAPI = {
       placeholder.remove()
     }
     entry.deferredNote = null
+    entry.pendingBody = false
 
-    entry.file = { ...entry.file, ...file, deferred: false }
+    entry.file = { ...entry.file, ...file, deferred: false, pending: false }
     entry.mountable = true
     const host = makePlaceholderHost(entry, entry.file)
     section.appendChild(host)
@@ -780,10 +804,17 @@ window.diffAPI = {
 
   // Collapse/expand every section at once. Expanding mounts only sections
   // already near the viewport; the mount observer handles the rest on scroll.
+  // Per-entry guard: one failing section (e.g. a Monaco mount throwing after
+  // its class already toggled) must never abort the loop and strand the rest
+  // in the old state. Failures are reported to Swift for diagnosis.
   setAllCollapsed(collapsed) {
     for (const entry of sections.values()) {
       if (entry.collapsed === !!collapsed) continue
-      setCollapsed(entry, !!collapsed, false)
+      try {
+        setCollapsed(entry, !!collapsed, false)
+      } catch (e) {
+        postToSwift({ type: 'error', message: `setAllCollapsed failed for ${entry.file?.filePath}: ${e?.message ?? e}` })
+      }
     }
   },
 

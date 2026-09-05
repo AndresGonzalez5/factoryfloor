@@ -18,8 +18,10 @@ final class MonacoDiffBridge: ObservableObject {
     private var coordinator: Coordinator?
     private var appearanceObserver: NSKeyValueObservation?
 
-    /// Fired when diff.js reports all editors have finished rendering ("contentReady").
-    /// ChangesView uses this to drop its loading / refreshing indicator.
+    /// Fired when diff.js reports shells have finished rendering
+    /// ("contentReady"). ChangesView uses this to drop its loading /
+    /// refreshing indicator; streamed bodies fill in skeleton placeholders
+    /// afterwards without holding the indicator.
     var onContentReady: (() -> Void)?
 
     /// Resolves the (original, modified, languageId, editable) content for a
@@ -51,14 +53,14 @@ final class MonacoDiffBridge: ObservableObject {
 
     var reviewContext: ReviewContext?
 
-    /// Git fingerprint from the last successful setFiles() call. ChangesView uses
+    /// Git fingerprint from the last successful setShells() call. ChangesView uses
     /// it to skip reloading when nothing in git has changed between tab visits.
     var lastFingerprint: String?
 
     /// The mode ("branch"/"uncommitted") that was active for the last load.
     var lastMode: String?
 
-    /// Number of files from the last setFiles() call. Stored here (not @State) so
+    /// Number of files from the last setShells() call. Stored here (not @State) so
     /// it survives the SwiftUI view being re-created on a tab switch.
     var lastFileCount = 0
 
@@ -66,10 +68,17 @@ final class MonacoDiffBridge: ObservableObject {
     /// Cached alongside the other `last*` fields for instant tab revisits.
     var lastBaseLabel = ""
 
-    /// Monotonic content generation. Bumped on every setFiles/setShells so
-    /// late `contentReady` callbacks from a superseded render can be ignored
-    /// by comparing against the generation captured at load time.
+    /// Monotonic content generation. Bumped on every setShells so late
+    /// `contentReady` callbacks from a superseded render can be ignored by
+    /// comparing against the generation captured at load time.
     private(set) var contentGeneration = 0
+
+    /// Monotonic body-stream generation. Bumped on every setShells; chunked
+    /// body deliveries capture it and stop when it moves (mode switch,
+    /// refresh, newer load). Lives on the bridge — not @State — so streams
+    /// survive Changes tab switches, which rebuild the SwiftUI view (and its
+    /// @State) while this bridge and its WKWebView persist.
+    var streamGeneration = 0
 
     /// Structured changed-file list from the last load. Cached here (not @State)
     /// so the Changes sidebar tree survives the SwiftUI view being re-created on
@@ -81,7 +90,7 @@ final class MonacoDiffBridge: ObservableObject {
     /// tab switches; ChangesView mirrors it into `dirtyPaths` for rendering.
     var dirtyPaths: Set<String> = []
 
-    /// Whether setFiles() has run at least once (cached content lives in the WebView).
+    /// Whether setShells() has run at least once (cached content lives in the WebView).
     private(set) var hasContent = false
 
     // MARK: - WebView lifecycle
@@ -123,25 +132,39 @@ final class MonacoDiffBridge: ObservableObject {
 
     // MARK: - Diff API
 
-    /// Render the given files as a stack of Monaco diff editors.
-    /// Each dict carries: filePath, status, languageId, originalText, modifiedText,
-    /// and optionally binary/deferred/changedLines for the placeholder cases.
-    /// Bumps `contentGeneration`; `contentReady` handlers should compare the
-    /// generation they captured against the current value to drop late
-    /// callbacks from superseded renders.
-    func setFiles(_ files: [[String: Any]]) {
+    /// Render shells for the given files: metadata-only entries (filePath,
+    /// status, languageId, changedLines, editable, binary/deferred/pending
+    /// flags, viewed/collapsed). Normal files arrive with `pending: true` and
+    /// empty texts; their bodies stream in afterwards via `loadFileContent`,
+    /// which upgrades each skeleton in place. Shells render as cheap DOM
+    /// (headers + placeholders), so first paint never waits on Monaco diff
+    /// computation or a giant single JSON transfer.
+    /// Bumps `contentGeneration` and `streamGeneration`; body chunks capture
+    /// the latter and stop when it moves. Returns false when the shells can't
+    /// even be serialized — the caller must clear its loading state instead
+    /// of waiting for a `contentReady` that will never arrive.
+    @discardableResult
+    func setShells(_ shells: [[String: Any]]) -> Bool {
         hasContent = true
         contentGeneration += 1
+        streamGeneration += 1
         let generation = contentGeneration
+        guard let json = Self.jsonString(from: shells) else {
+            print("[MonacoDiff] setShells serialization failed (\(shells.count) entries)")
+            return false
+        }
         enqueue {
             guard let webView = self.webView else { return }
-            guard let json = Self.jsonString(from: files) else { return }
             webView.evaluateJavaScript("window.diffAPI.setFiles(\(json), \(generation))")
         }
+        return true
     }
 
-    /// Inject the loaded content for a previously-deferred file, replacing its
-    /// placeholder with a real diff editor in place (no full re-render).
+    /// Inject the body for a shell whose texts were deferred — either a
+    /// large-file placeholder after click/scroll-to-load, or a `pending`
+    /// shell from the chunked body stream — replacing its placeholder with a
+    /// real diff editor in place (no full re-render). Duplicate deliveries
+    /// are ignored by JS, so a body racing click-to-load is harmless.
     func loadFileContent(filePath: String, originalText: String, modifiedText: String, languageId: String, editable: Bool) {
         enqueue {
             guard let webView = self.webView else { return }

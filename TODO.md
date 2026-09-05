@@ -11,6 +11,8 @@
 ## Bugs
 
 - [x] Branch name doesn't appear in sidebar after workstream creation until the 15s refresh timer fires. Fixed: call `refreshPathValidity` immediately in the `.workstreamWorktreeReady` handler.
+- [ ] Changes tab: added (status A) files show a constant ~4-line trailing blank gap after their diff; modified files size correctly. Sizing path (`max(modified, original) + HEIGHT_PADDING` in `editor/src/diff.js:resizeDiffEditor`) is symmetric for added/modified, and untracked files get real `changedLines` via `annotate`, so the cause is likely inside Monaco's measured `getContentHeight()` for pure-add inline diffs — needs runtime logging (`host.style.height` vs per-side `getContentHeight()`) to confirm before fixing.
+- [x] Changes tab: infinite "Refreshing…" (loading flags cleared only by JS `contentReady`, while the 10s timer + Refresh button were gated on those same flags — deadlock). Fixed: shells-first + chunked-body transport, tree decoupled from diff readiness, 15s Swift watchdog, timer skips (never cancels) in-flight git work.
 
 ## UI improvements
 
@@ -19,7 +21,7 @@
 
 ## Future
 
-- [ ] Changes tab: split `setFiles` transport into shells-first + chunked bodies (JS lazy-mount already chunks rendering; the single-JSON bridge remains the largest main-thread cost on huge worktrees)
+- [x] Changes tab: shells-first + chunked-body transport (Swift sends metadata shells via `setShells`, streams bodies in chunks of 12; JS upgrades `pending` skeletons in place via the shared `loadFileContent` path)
 - [ ] Agent roster avatars for more agent types: drop 64x64 `avatar_<type>_<k>.png` files in `Resources/AgentSprites/` (claude/plan have 1 sprite each; explore/generalpurpose have 4 each — sets cycle automatically; see docs/agent-roster.md)
 - [ ] External Chrome integration: launch with --remote-debugging-port for WebMCP/CDP
 - [ ] PR management: create and manage PRs from workstreams (currently view-only)

@@ -107,9 +107,11 @@ struct FileTreeNode: Identifiable, Equatable {
 struct ChangesFileTreeSidebar: View {
     let files: [DiffFile]
     @Binding var selectedFilePath: String?
-    /// False while a diff load is in flight. The tree dims and ignores
-    /// selection so a file can never be picked before its diff exists —
-    /// the select-during-load race is removed by construction.
+    /// False only while the very first load has nothing to show yet. Reloads
+    /// keep the stale tree interactive: the tree and the diff pane swap
+    /// atomically per load, so a selection can never target missing content —
+    /// the diff webview force-mounts navigated files whose bodies are still
+    /// streaming.
     var isEnabled = true
     let onSelect: (String) -> Void
     /// Open the file in a full Editor tab (nil hides the menu item).
