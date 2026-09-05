@@ -466,3 +466,5 @@
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Vols descartar tots els canvis sense desar de \"%@\"? Aquesta acció no es pot desfer.";
 "Unsaved changes" = "Canvis sense desar";
 "Save your edits before switching modes" = "Deseu els canvis abans de canviar de mode";
+"Could Not Save" = "No s'ha pogut desar";
+"Could not save \"%@\"." = "No s'ha pogut desar \"%@\".";

@@ -50,6 +50,10 @@ struct ChangesView: View {
     /// Reports whether ANY diff edit is unsaved (wired by the workspace
     /// container to drive the Save menu item state).
     var onDirtyChanged: ((Bool) -> Void)? = nil
+    /// Whether this workspace is frontmost. Guards the Cmd+S handler so a
+    /// save keypress can't persist diff edits in a background workstream
+    /// (every mounted ChangesView observes the same notification).
+    var isActive = true
 
     @State private var isLoading = true
     @State private var isRefreshing = false
@@ -85,6 +89,8 @@ struct ChangesView: View {
     @State private var dirtyPaths: Set<String> = []
     /// Paths currently being written to disk (re-entrant Save guard).
     @State private var savingPaths: Set<String> = []
+    /// File whose inline-edit save just failed (nil = no alert).
+    @State private var saveErrorPath: String?
     /// File awaiting delete confirmation (nil = no alert). The Trash vs
     /// Discard wording resolves via `pendingDeleteUntracked` before showing.
     @State private var pendingDelete: DiffFile?
@@ -95,13 +101,14 @@ struct ChangesView: View {
     /// final value on release.
     @State private var sidebarWidth: Double
 
-    init(workstreamID: UUID, workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge, onOpenInEditor: ((String) -> Void)? = nil, onDirtyChanged: ((Bool) -> Void)? = nil) {
+    init(workstreamID: UUID, workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge, onOpenInEditor: ((String) -> Void)? = nil, onDirtyChanged: ((Bool) -> Void)? = nil, isActive: Bool = true) {
         self.workstreamID = workstreamID
         self.workingDirectory = workingDirectory
         self.projectDirectory = projectDirectory
         self.bridge = bridge
         self.onOpenInEditor = onOpenInEditor
         self.onDirtyChanged = onDirtyChanged
+        self.isActive = isActive
         _sidebarWidth = State(initialValue: Self.loadSidebarWidth())
     }
 
@@ -247,6 +254,25 @@ struct ChangesView: View {
                         file.relativePath
                     ))
                 }
+            }
+        }
+        .alert(
+            "Could Not Save",
+            isPresented: Binding(
+                get: { saveErrorPath != nil },
+                set: { if !$0 { saveErrorPath = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let path = saveErrorPath {
+                Text(String(
+                    format: NSLocalizedString(
+                        "Could not save \"%@\".",
+                        comment: "Changes tab: inline-edit save failure"
+                    ),
+                    path
+                ))
             }
         }
     }
@@ -529,6 +555,7 @@ struct ChangesView: View {
     /// so a keypress racing the contentChanged message still hits the file
     /// being typed in.
     private func saveViaKeyboard() {
+        guard isActive else { return }
         let selected = selectedFilePath
         Task {
             for path in await bridge.saveTargets(selected: selected) {
@@ -562,7 +589,10 @@ struct ChangesView: View {
             }.value
             await MainActor.run {
                 savingPaths.remove(path)
-                guard saved else { return }
+                guard saved else {
+                    saveErrorPath = path
+                    return
+                }
                 bridge.markClean(filePath: path)
                 setDirty(path, dirty: false)
                 if dirtyPaths.isEmpty {
@@ -769,7 +799,15 @@ struct ChangesView: View {
                 oldPath: file?.oldPath
             )
             let languageId = MonacoLanguage.id(for: (filePath as NSString).lastPathComponent)
-            return (original, modified, languageId)
+            // Deferred files were marked non-editable until their content was
+            // known; re-gate here with the same strict-UTF-8 rule as the
+            // initial payload so saving can never corrupt undecodable bytes.
+            let editable = currentMode == .uncommitted
+                && file?.status != .deleted
+                && GitOperations.isValidUTF8(
+                    atPath: (workDir as NSString).appendingPathComponent(filePath)
+                )
+            return (original, modified, languageId, editable)
         }
     }
 
@@ -953,8 +991,8 @@ struct ChangesView: View {
                 "changedLines": file.changedLines,
                 // Inline editing is uncommitted-mode only (branch stays a
                 // read-only review) and never applies to deletions, which have
-                // no modified side. Binary/deferred placeholders ignore the
-                // flag until real content is loaded.
+                // no modified side. Deferred placeholders start non-editable
+                // and are re-gated when their content loads (see onLoadFile).
                 "editable": mode == .uncommitted && file.status != .deleted,
             ]
 
@@ -966,15 +1004,18 @@ struct ChangesView: View {
                 entry["modifiedText"] = ""
             case .deferred:
                 // No content read yet; diff.js renders a click-to-load placeholder.
+                // Editing re-enables on upgrade only if the loaded content is
+                // strict UTF-8 (see onLoadFile).
                 entry["deferred"] = true
+                entry["editable"] = false
                 entry["originalText"] = ""
                 entry["modifiedText"] = ""
             case .normal:
                 let lookup = file.oldPath ?? file.relativePath
+                let fullPath = (workDir as NSString).appendingPathComponent(file.relativePath)
                 let original = file.status == .added ? "" : (originalByLookup[lookup] ?? "")
                 let modified: String = {
                     if file.status == .deleted { return "" }
-                    let fullPath = (workDir as NSString).appendingPathComponent(file.relativePath)
                     // Lossy decode: undecodable bytes become U+FFFD instead of
                     // failing the whole read (which rendered empty diffs).
                     return GitOperations.lossyFileText(atPath: fullPath) ?? ""
@@ -983,11 +1024,18 @@ struct ChangesView: View {
                     // Minified/huge content: demote to click-to-load even
                     // though the line/byte pre-checks passed.
                     entry["deferred"] = true
+                    entry["editable"] = false
                     entry["originalText"] = ""
                     entry["modifiedText"] = ""
                 } else {
                     entry["originalText"] = original
                     entry["modifiedText"] = modified
+                    // Inline editing writes the decoded text back to disk, so it
+                    // stays off unless the file round-trips strict UTF-8 — a
+                    // lossy save would persist U+FFFD over the original bytes.
+                    if mode == .uncommitted && file.status != .deleted {
+                        entry["editable"] = GitOperations.isValidUTF8(atPath: fullPath)
+                    }
                 }
             }
 

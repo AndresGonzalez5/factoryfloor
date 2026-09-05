@@ -22,10 +22,11 @@ final class MonacoDiffBridge: ObservableObject {
     /// ChangesView uses this to drop its loading / refreshing indicator.
     var onContentReady: (() -> Void)?
 
-    /// Resolves the (original, modified, languageId) content for a single deferred
-    /// file when its placeholder is clicked. Invoked off the main thread.
-    /// ChangesView installs this so the bridge has the current workDir + base ref.
-    var onLoadFile: ((_ filePath: String) -> (original: String, modified: String, languageId: String))?
+    /// Resolves the (original, modified, languageId, editable) content for a
+    /// single deferred file when its placeholder is clicked. Invoked off the
+    /// main thread. ChangesView installs this so the bridge has the current
+    /// workDir + base ref.
+    var onLoadFile: ((_ filePath: String) -> (original: String, modified: String, languageId: String, editable: Bool))?
 
     /// Fired when a diff header's Viewed checkbox toggles in JS.
     var onViewedChanged: ((_ filePath: String, _ viewed: Bool) -> Void)?
@@ -141,7 +142,7 @@ final class MonacoDiffBridge: ObservableObject {
 
     /// Inject the loaded content for a previously-deferred file, replacing its
     /// placeholder with a real diff editor in place (no full re-render).
-    func loadFileContent(filePath: String, originalText: String, modifiedText: String, languageId: String) {
+    func loadFileContent(filePath: String, originalText: String, modifiedText: String, languageId: String, editable: Bool) {
         enqueue {
             guard let webView = self.webView else { return }
             let payload: [String: Any] = [
@@ -149,6 +150,7 @@ final class MonacoDiffBridge: ObservableObject {
                 "originalText": originalText,
                 "modifiedText": modifiedText,
                 "languageId": languageId,
+                "editable": editable,
             ]
             guard let json = Self.jsonString(from: payload) else { return }
             webView.evaluateJavaScript("window.diffAPI.loadFileContent(\(json))")
@@ -311,7 +313,7 @@ final class MonacoDiffBridge: ObservableObject {
         guard let resolver = onLoadFile else { return }
         let context = reviewContext
         DispatchQueue.global(qos: .userInitiated).async {
-            let (original, modified, languageId) = resolver(filePath)
+            let (original, modified, languageId, editable) = resolver(filePath)
             DispatchQueue.main.async {
                 // The resolver belongs to the load that installed it; if a
                 // mode switch or refresh replaced the review context while git
@@ -322,7 +324,8 @@ final class MonacoDiffBridge: ObservableObject {
                     filePath: filePath,
                     originalText: original,
                     modifiedText: modified,
-                    languageId: languageId
+                    languageId: languageId,
+                    editable: editable
                 )
                 if let context {
                     let version = ChangesView.contentVersion(original: original, modified: modified)

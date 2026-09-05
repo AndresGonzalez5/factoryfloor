@@ -466,3 +466,5 @@
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Kasta alla osparade ändringar i \"%@\"? Detta kan inte ångras.";
 "Unsaved changes" = "Osparade ändringar";
 "Save your edits before switching modes" = "Spara ändringarna innan du byter läge";
+"Could Not Save" = "Kunde inte spara";
+"Could not save \"%@\"." = "Kunde inte spara \"%@\".";

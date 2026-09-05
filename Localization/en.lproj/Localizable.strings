@@ -466,3 +466,5 @@
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Discard all uncommitted changes to \"%@\"? This cannot be undone.";
 "Unsaved changes" = "Unsaved changes";
 "Save your edits before switching modes" = "Save your edits before switching modes";
+"Could Not Save" = "Could Not Save";
+"Could not save \"%@\"." = "Could not save \"%@\".";

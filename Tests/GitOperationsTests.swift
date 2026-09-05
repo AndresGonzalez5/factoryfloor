@@ -902,6 +902,15 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "untracked.txt"))
     }
 
+    func testIsValidUTF8RejectsNonUTF8Bytes() throws {
+        let repo = try makeRepoWithFiles()
+        let latin1 = repo.appendingPathComponent("latin1.txt")
+        try Data([0x43, 0x61, 0x66, 0xE9, 0x0A]).write(to: latin1) // "Café" in Latin-1
+        XCTAssertFalse(GitOperations.isValidUTF8(atPath: latin1.path))
+        XCTAssertTrue(GitOperations.isValidUTF8(atPath: repo.appendingPathComponent("tracked.txt").path))
+        XCTAssertFalse(GitOperations.isValidUTF8(atPath: repo.appendingPathComponent("missing.txt").path))
+    }
+
     // MARK: - Helpers
 
     @discardableResult

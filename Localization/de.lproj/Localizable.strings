@@ -465,3 +465,5 @@
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Alle ungespeicherten Änderungen an \"%@\" verwerfen? Dies kann nicht rückgängig gemacht werden.";
 "Unsaved changes" = "Ungespeicherte Änderungen";
 "Save your edits before switching modes" = "Speichern Sie Ihre Änderungen, bevor Sie den Modus wechseln";
+"Could Not Save" = "Speichern fehlgeschlagen";
+"Could not save \"%@\"." = "Konnte \"%@\" nicht speichern.";

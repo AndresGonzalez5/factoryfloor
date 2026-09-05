@@ -466,3 +466,5 @@
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "¿Descartar todos los cambios sin guardar de \"%@\"? Esta acción no se puede deshacer.";
 "Unsaved changes" = "Cambios sin guardar";
 "Save your edits before switching modes" = "Guarde los cambios antes de cambiar de modo";
+"Could Not Save" = "No se pudo guardar";
+"Could not save \"%@\"." = "No se pudo guardar \"%@\".";

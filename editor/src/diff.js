@@ -18,6 +18,10 @@ const LINE_HEIGHT = 19
 const MIN_EDITOR_HEIGHT = 60
 // Extra lines added to the initial estimate to cover diff decorations/widgets.
 const PADDING_LINES = 2
+// Extra context lines assumed visible around changes in the pre-diff estimate.
+// Deliberately small: underestimates grow (off-screen, invisible) once the
+// diff is measured, while overestimates leave permanent blank scroll gaps.
+const ESTIMATE_CONTEXT_LINES = 8
 // Padding added to the measured content height when sizing the container.
 const HEIGHT_PADDING = 8
 // Mount editors this far (px) beyond the viewport so scrolling never shows a
@@ -44,7 +48,7 @@ const STR = {
 // Active sections keyed by file path:
 // { section, host, editor, original, modified, file, mountable, mounted,
 //   diffFired, collapsed, gen, dirty, cleanVersionId, contentListener,
-//   syncEditUI }
+//   contentSizeListener, syncEditUI }
 const sections = new Map()
 // Path of the last-focused modified editor (sticky: updated on focus, never
 // cleared on blur) so Cmd+S can save the file being typed in without a click.
@@ -105,17 +109,28 @@ function calculateEditorHeight(originalText, modifiedText) {
 // hideUnchangedRegions folding) so the stacked page has no trailing gray gap.
 // Stale-generation callbacks (disposed editors of a previous render) are
 // ignored: resizing a recycled host would corrupt the new render's layout.
+// Height is the max of both sides (mirroring VS Code's multi-diff editor, which
+// sizes stacked items from the diff editor's combined content height): reading
+// only the modified side under-measures pure-deletion hunks.
 function resizeDiffEditor(diffEditor, host, gen) {
   if (gen !== jsGeneration) return
   const modifiedEditor = diffEditor.getModifiedEditor()
-  const contentHeight = modifiedEditor.getContentHeight()
+  const originalEditor = diffEditor.getOriginalEditor()
+  const contentHeight = Math.max(
+    modifiedEditor.getContentHeight(),
+    originalEditor ? originalEditor.getContentHeight() : 0
+  )
   const newHeight = Math.max(contentHeight + HEIGHT_PADDING, MIN_EDITOR_HEIGHT)
+  // No-op when unchanged: breaks the layout→contentSizeChange→layout cycle
+  // (the content-size listener below calls back into here on every change).
+  if (host.style.height === `${newHeight}px`) return
   host.style.height = `${newHeight}px`
   diffEditor.layout()
 }
 
 function disposeEditor(entry) {
   if (entry.contentListener) entry.contentListener.dispose()
+  if (entry.contentSizeListener) entry.contentSizeListener.dispose()
   if (entry.editor) entry.editor.dispose()
   if (entry.original) entry.original.dispose()
   if (entry.modified) entry.modified.dispose()
@@ -123,6 +138,7 @@ function disposeEditor(entry) {
   entry.original = null
   entry.modified = null
   entry.contentListener = null
+  entry.contentSizeListener = null
   entry.mounted = false
 }
 
@@ -148,11 +164,29 @@ function isNearViewport(el, margin) {
   return r.bottom >= -margin && r.top <= window.innerHeight + margin
 }
 
+// Mount every unmounted mountable section already near the viewport.
+// Covers chunk turns lost to rAF stalls (hidden webview): those files are
+// observed, but observation only fires on scroll — without this sweep they'd
+// sit blank until the user scrolls or toggles collapse.
+function sweepNearViewport(gen) {
+  if (gen !== jsGeneration) return
+  for (const entry of sections.values()) {
+    if (entry.gen !== gen) continue
+    if (!entry.mountable || entry.collapsed || entry.mounted || !entry.host) continue
+    if (isNearViewport(entry.host, MOUNT_MARGIN)) mountEditor(entry)
+  }
+}
+
 function mountEditor(entry) {
   if (entry.mounted || !entry.mountable || entry.collapsed) return
   if (entry.gen !== jsGeneration) return
   const host = entry.host
   if (!host) return
+  // Defer creation while the page has no layout yet (e.g. setFiles racing a
+  // tab-switch reparent): editors born in a zero-size host render blank and
+  // never recover. The host stays observed, so the mount observer picks it up
+  // once the container has size.
+  if (host.clientWidth === 0) return
   const file = entry.file
   const gen = entry.gen
   host.classList.remove('unmounted')
@@ -174,19 +208,24 @@ function mountEditor(entry) {
   // route horizontal-dominant wheel events (trackpad swipe, shift+scroll) into
   // the diff editor's horizontal scroll. Vertical-dominant events are left to
   // the page so browsing between files keeps working.
-  host.addEventListener('wheel', (e) => {
-    const horizontalIntent = e.shiftKey && e.deltaY !== 0
-    const dominantX = Math.abs(e.deltaX) > Math.abs(e.deltaY)
-    if (!horizontalIntent && !dominantX) return
-    const delta = scaleWheelDelta(
-      horizontalIntent ? e.deltaY : e.deltaX,
-      e.deltaMode
-    )
-    if (delta === 0) return
-    const modifiedEditor = diffEditor.getModifiedEditor()
-    modifiedEditor.setScrollLeft(modifiedEditor.getScrollLeft() + delta)
-    e.preventDefault()
-  })
+  // Bound once per host: hosts survive unmount/remount cycles, and re-adding
+  // the listener on every mount stacks duplicate handlers.
+  if (!host.dataset.wheelBound) {
+    host.dataset.wheelBound = '1'
+    host.addEventListener('wheel', (e) => {
+      const horizontalIntent = e.shiftKey && e.deltaY !== 0
+      const dominantX = Math.abs(e.deltaX) > Math.abs(e.deltaY)
+      if (!horizontalIntent && !dominantX) return
+      const delta = scaleWheelDelta(
+        horizontalIntent ? e.deltaY : e.deltaX,
+        e.deltaMode
+      )
+      if (delta === 0) return
+      const modifiedEditor = diffEditor.getModifiedEditor()
+      modifiedEditor.setScrollLeft(modifiedEditor.getScrollLeft() + delta)
+      e.preventDefault()
+    })
+  }
 
   entry.editor = diffEditor
   entry.original = original
@@ -226,6 +265,19 @@ function mountEditor(entry) {
       if (pendingVisible.size === 0) reportContentReady(gen)
     }
   })
+
+  // Resize on every content-size change (diff computed, unchanged regions
+  // hidden/revealed, typing, wrapping). Same signal VS Code's own multi-diff
+  // editor uses to size stacked items. onDidUpdateDiff alone is not enough: it
+  // can fire before hideUnchangedRegions settles, permanently stranding the
+  // host at full-file height (the giant-blank-gap bug). Guarded: the event is
+  // absent from the public IDiffEditor typings (only on the widget runtime).
+  if (typeof diffEditor.onDidContentSizeChange === 'function') {
+    entry.contentSizeListener = diffEditor.onDidContentSizeChange(() => {
+      if (entry.gen !== jsGeneration) return
+      resizeDiffEditor(diffEditor, host, gen)
+    })
+  }
 }
 
 // Free a far-off-screen editor. The host keeps its measured pixel height, so
@@ -472,9 +524,22 @@ function makePlaceholderHost(entry, file) {
   const host = document.createElement('div')
   host.className = 'diff-body unmounted'
   host.dataset.filePath = file.filePath
-  host.style.height = `${calculateEditorHeight(file.originalText, file.modifiedText)}px`
+  host.style.height = `${estimateEditorHeight(file)}px`
   entry.host = host
   return host
+}
+
+// Pre-diff host height. Estimated from the changed line count — not the full
+// file length: hideUnchangedRegions folds everything else away, so full-file
+// estimates reserve thousands of pixels of blank scroll space for sections
+// that haven't measured yet. Underestimates are harmless (hosts grow on mount,
+// ~1200px before becoming visible); overestimates are the blank-gap bug.
+function estimateEditorHeight(file) {
+  if (typeof file.changedLines === 'number' && file.changedLines >= 0) {
+    const lines = file.changedLines + ESTIMATE_CONTEXT_LINES + PADDING_LINES
+    return Math.max(lines * LINE_HEIGHT, MIN_EDITOR_HEIGHT)
+  }
+  return calculateEditorHeight(file.originalText, file.modifiedText)
 }
 
 // Normalize a wheel delta to pixels. Line-based (mouse wheels) and page-based
@@ -501,8 +566,12 @@ window.diffAPI = {
     }
     emptyState.classList.remove('visible')
 
-    // Safety: report ready after 5s even if some onDidUpdateDiff never fires.
-    safetyTimer = setTimeout(() => reportContentReady(myGen), 5000)
+    // Safety: after 5s, mount anything near that never got going (rAF stall)
+    // and report ready even if some onDidUpdateDiff never fires.
+    safetyTimer = setTimeout(() => {
+      sweepNearViewport(myGen)
+      reportContentReady(myGen)
+    }, 5000)
 
     for (const file of files) {
       const section = document.createElement('div')
@@ -571,11 +640,15 @@ window.diffAPI = {
     // frames so a huge repo doesn't block first paint), then observe the rest.
     // contentReady waits only for THESE editors — below-the-fold files mount
     // (and diff) on scroll without holding the loading indicator.
+    // Every mountable host is observed up front: chunk-mounting below can
+    // stall partway (rAF pauses while the webview is hidden), and a file that
+    // misses its chunk turn would otherwise sit blank forever — no observer
+    // would ever mount it on scroll. Collapse/expand only masked this.
     const mountables = []
     for (const entry of sections.values()) {
       if (!entry.mountable || entry.collapsed || !entry.host) continue
+      if (mountObserver) mountObserver.observe(entry.host)
       if (isNearViewport(entry.host, MOUNT_MARGIN)) mountables.push(entry)
-      else if (mountObserver) mountObserver.observe(entry.host)
     }
     pendingVisible = new Set(mountables.map(e => e.file.filePath))
 
@@ -590,14 +663,14 @@ window.diffAPI = {
       const slice = mountables.slice(i, i + CHUNK)
       for (const entry of slice) {
         mountEditor(entry)
-        // Mounted editors still need scroll-away disposal tracking.
-        if (mountObserver && entry.host) mountObserver.observe(entry.host)
       }
       i += CHUNK
       if (i < mountables.length) {
         requestAnimationFrame(mountChunk)
-      } else if (pendingVisible.size === 0) {
-        reportContentReady(myGen)
+      } else {
+        // Queue drained: mount anything near that lost its turn to a stall.
+        sweepNearViewport(myGen)
+        if (pendingVisible.size === 0) reportContentReady(myGen)
       }
     }
     requestAnimationFrame(mountChunk)

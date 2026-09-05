@@ -845,7 +845,8 @@ struct TerminalContainerView: View {
                     onDirtyChanged: { [self] dirty in
                         changesDirtyState = dirty
                         syncMenuFlags()
-                    }
+                    },
+                    isActive: isActive
                 )
             } else {
                 ProgressView()

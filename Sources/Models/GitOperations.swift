@@ -635,6 +635,14 @@ enum GitOperations {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// Strict UTF-8 check for a file on disk. The Changes tab only enables
+    /// inline diff editing when this passes: saving a lossy-decoded file back
+    /// would persist U+FFFD replacements over the original bytes (corruption).
+    static func isValidUTF8(atPath path: String) -> Bool {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return false }
+        return String(data: data, encoding: .utf8) != nil
+    }
+
     /// Create a git worktree for a workstream, branching off the default branch.
     /// Returns the worktree path on success, nil on failure.
     static func createWorktree(projectPath: String, projectName: String, workstreamName: String, symlinkEnv: Bool = true) -> String? {
