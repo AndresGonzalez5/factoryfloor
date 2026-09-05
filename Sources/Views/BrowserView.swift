@@ -30,6 +30,73 @@ func shouldRetargetBrowser(currentURL: String?, displayedURL: String, previousDe
     return normalizedBrowserURL(currentURL) == normalizedBrowserURL(previousDefaultURL)
 }
 
+/// URL for the "server moved" banner: when the dev server's port changes
+/// but the tab deliberately was *not* auto-retargeted (the user navigated
+/// elsewhere), surface the new URL instead of leaving the tab on a dead
+/// port with no affordance. Returns nil when an auto-retarget applies, when
+/// the tab already shows the new URL, or while the server is still starting.
+func pendingRetargetURL(currentURL: String?, displayedURL: String, previousDefaultURL: String, nextDefaultURL: String, connectionError: Bool, isWaitingForServer: Bool) -> String? {
+    guard !isWaitingForServer else { return nil }
+    guard normalizedBrowserURL(previousDefaultURL) != normalizedBrowserURL(nextDefaultURL) else { return nil }
+    if shouldRetargetBrowser(
+        currentURL: currentURL,
+        displayedURL: displayedURL,
+        previousDefaultURL: previousDefaultURL,
+        nextDefaultURL: nextDefaultURL,
+        connectionError: connectionError
+    ) {
+        return nil
+    }
+    let current = normalizedBrowserURL(currentURL ?? displayedURL)
+    guard current != normalizedBrowserURL(nextDefaultURL) else { return nil }
+    return nextDefaultURL
+}
+
+/// Decision for a browser tab (re)appearing with a live webView whose URL may
+/// predate the current defaultURL — e.g. the port changed while the tab was
+/// inactive, so `onChange(defaultURL)` never fired (the view was out of the
+/// hierarchy). Never auto-navigates a user who browsed elsewhere; that case
+/// gets a banner instead.
+enum BrowserAppearAction: Equatable {
+    case none
+    case navigate(String)
+    case showMovedBanner(String)
+}
+
+func browserAppearAction(currentURL: String?, displayedURL: String, previousDefaultURL: String?, nextDefaultURL: String, connectionError: Bool, isWaitingForServer: Bool) -> BrowserAppearAction {
+    guard !isWaitingForServer, let previous = previousDefaultURL,
+          normalizedBrowserURL(previous) != normalizedBrowserURL(nextDefaultURL)
+    else { return .none }
+    if shouldRetargetBrowser(
+        currentURL: currentURL,
+        displayedURL: displayedURL,
+        previousDefaultURL: previous,
+        nextDefaultURL: nextDefaultURL,
+        connectionError: connectionError
+    ) {
+        return .navigate(nextDefaultURL)
+    }
+    if let moved = pendingRetargetURL(
+        currentURL: currentURL,
+        displayedURL: displayedURL,
+        previousDefaultURL: previous,
+        nextDefaultURL: nextDefaultURL,
+        connectionError: connectionError,
+        isWaitingForServer: isWaitingForServer
+    ) {
+        return .showMovedBanner(moved)
+    }
+    return .none
+}
+
+/// Whether to show the "server stopped" banner: the tab holds a rendered page
+/// that looks alive, but the dev server is intentionally down. Hidden while
+/// starting/waiting (the spinner covers it) and once a load fails (the error
+/// view with Retry communicates it instead).
+func shouldShowStoppedBanner(serverStopped: Bool, isWaitingForServer: Bool, connectionError: Bool, hasPageContent: Bool) -> Bool {
+    serverStopped && !isWaitingForServer && !connectionError && hasPageContent
+}
+
 private func normalizedBrowserURL(_ urlString: String) -> String {
     var resolved = urlString
     if !resolved.contains("://") {
@@ -51,6 +118,14 @@ struct BrowserView: View {
     var isWaitingForServer = false
     var tabID: UUID?
     let webView: WKWebView
+    /// The defaultURL the tab last saw (tracked by the container across tab
+    /// switches). Lets onAppear reconcile changes missed while inactive.
+    var previousDefaultURL: String? = nil
+    /// The dev server was intentionally stopped while this tab holds a
+    /// rendered page. Shows a stopped banner instead of the stale page
+    /// silently posing as live.
+    var serverStopped = false
+    var onStartServer: (() -> Void)? = nil
 
     @State private var urlText: String = ""
     @State private var isLoading = false
@@ -58,6 +133,7 @@ struct BrowserView: View {
     @State private var canGoForward = false
     @State private var connectionError = false
     @State private var pageTitle: String?
+    @State private var movedURL: String?
     @FocusState private var urlFieldFocused: Bool
 
     var body: some View {
@@ -107,6 +183,54 @@ struct BrowserView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(.bar)
+
+            if let movedURL {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.blue)
+                    Text(String(format: NSLocalizedString("Dev server moved to %@", comment: ""), movedURL))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("Switch") {
+                        self.movedURL = nil
+                        urlText = movedURL
+                        navigateTo(movedURL)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.blue.opacity(0.08))
+            }
+
+            if shouldShowStoppedBanner(
+                serverStopped: serverStopped,
+                isWaitingForServer: isWaitingForServer,
+                connectionError: connectionError,
+                hasPageContent: webView.url != nil
+            ) {
+                HStack(spacing: 8) {
+                    Image(systemName: "stop.circle")
+                        .foregroundStyle(.secondary)
+                    Text("Dev server stopped")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button("Start") {
+                        onStartServer?()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.secondary.opacity(0.08))
+            }
 
             // Loading indicator
             if isLoading {
@@ -173,12 +297,39 @@ struct BrowserView: View {
                 canGoForward = webView.canGoForward
                 isLoading = webView.isLoading
                 pageTitle = webView.title
+                // Reconcile URL changes missed while the tab was inactive (the
+                // view was out of the hierarchy, so onChange never fired).
+                switch browserAppearAction(
+                    currentURL: webView.url?.absoluteString,
+                    displayedURL: urlText,
+                    previousDefaultURL: previousDefaultURL,
+                    nextDefaultURL: defaultURL,
+                    connectionError: connectionError,
+                    isWaitingForServer: isWaitingForServer
+                ) {
+                case .none:
+                    break
+                case let .navigate(url):
+                    movedURL = nil
+                    urlText = url
+                    navigateTo(url)
+                case let .showMovedBanner(url):
+                    movedURL = url
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusAddressBar)) { _ in
             urlFieldFocused = true
         }
         .onChange(of: defaultURL) { oldURL, newURL in
+            movedURL = pendingRetargetURL(
+                currentURL: webView.url?.absoluteString,
+                displayedURL: urlText,
+                previousDefaultURL: oldURL,
+                nextDefaultURL: newURL,
+                connectionError: connectionError,
+                isWaitingForServer: isWaitingForServer
+            )
             guard !isWaitingForServer else { return }
             guard shouldRetargetBrowser(
                 currentURL: webView.url?.absoluteString,
@@ -187,6 +338,7 @@ struct BrowserView: View {
                 nextDefaultURL: newURL,
                 connectionError: connectionError
             ) else { return }
+            movedURL = nil
             urlText = newURL
             navigateTo(newURL)
         }
@@ -207,6 +359,9 @@ struct BrowserView: View {
 
     private func navigateTo(_ urlString: String) {
         connectionError = false
+        if normalizedBrowserURL(urlString) == normalizedBrowserURL(defaultURL) {
+            movedURL = nil
+        }
         var resolved = urlString
         if !resolved.contains("://") {
             resolved = "http://\(resolved)"

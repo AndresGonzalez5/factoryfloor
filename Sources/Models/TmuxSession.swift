@@ -148,10 +148,14 @@ enum TmuxSession {
         }
     }
 
-    /// Kill the agent tmux session for a workstream.
+    /// Kill the agent and dev-server tmux sessions for a workstream.
+    /// The run session must be included: otherwise an archived workstream's
+    /// dev server keeps holding its port forever.
     static func killWorkstreamSessions(tmuxPath: String, project: String, workstream: String) {
         let agentSession = sessionName(project: project, workstream: workstream, role: "agent")
         killSession(tmuxPath: tmuxPath, sessionName: agentSession)
+        let runSession = sessionName(project: project, workstream: workstream, role: "run")
+        killSession(tmuxPath: tmuxPath, sessionName: runSession)
     }
 
     /// Kill the entire tmux server on the factoryfloor socket.

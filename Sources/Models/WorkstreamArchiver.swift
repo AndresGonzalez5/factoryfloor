@@ -7,6 +7,22 @@ enum WorkstreamArchiver {
     /// Paths currently being archived (background removal in progress).
     @MainActor static var archivingPaths: Set<String> = []
 
+    /// Kill a workstream's dev-server processes from a bulk-delete path
+    /// (project delete, clear-all, missing-project sweep) that otherwise only
+    /// evicts terminal surfaces. Kills the run tmux session, the recorded
+    /// process tree, and the run-state file. Runs blocking syscalls, so call
+    /// from a background task.
+    nonisolated static func killRunProcesses(workstreamID: UUID, tmuxPath: String?, project: String, workstream: String) {
+        if let tmuxPath {
+            let runSession = TmuxSession.sessionName(project: project, workstream: workstream, role: "run")
+            TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: runSession)
+        }
+        if let state = RunStateStore.load(for: workstreamID) {
+            RunProcessKiller.killTree(root: state.pid)
+        }
+        RunStateStore.remove(for: workstreamID)
+    }
+
     /// Posted on MainActor when a background worktree removal finishes.
     static let archivingDidComplete = Notification.Name("FFWorktreeArchivingComplete")
 
@@ -29,6 +45,12 @@ enum WorkstreamArchiver {
                 if let tmuxPath {
                     TmuxSession.killWorkstreamSessions(tmuxPath: tmuxPath, project: projName, workstream: wsName)
                 }
+                // The dev server (and its daemonized children) would otherwise
+                // keep holding the port with no workstream left to stop it.
+                if let state = RunStateStore.load(for: workstreamID) {
+                    RunProcessKiller.killTree(root: state.pid)
+                }
+                RunStateStore.remove(for: workstreamID)
             }
         }
         surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
@@ -94,6 +116,10 @@ enum WorkstreamArchiver {
                 if let tmuxPath {
                     TmuxSession.killWorkstreamSessions(tmuxPath: tmuxPath, project: projName, workstream: wsName)
                 }
+                if let state = RunStateStore.load(for: workstreamID) {
+                    RunProcessKiller.killTree(root: state.pid)
+                }
+                RunStateStore.remove(for: workstreamID)
                 // Clean up the agent launch script for this workstream.
                 try? FileManager.default.removeItem(atPath: AppConstants.agentScriptPath(for: workstreamID))
             }

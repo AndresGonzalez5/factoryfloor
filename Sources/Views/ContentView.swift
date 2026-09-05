@@ -223,10 +223,15 @@ struct ContentView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .clearProjects)) { _ in
+                let tmuxPath = appEnvironment.toolStatus.tmux.path
                 for project in projects {
                     for ws in project.workstreams {
                         surfaceCache.removeWorkstreamSurfaces(for: ws.id)
                         agentStateTracker.clear(workstreamID: ws.id)
+                        let wsID = ws.id, projName = project.name, wsName = ws.name
+                        Task.detached {
+                            WorkstreamArchiver.killRunProcesses(workstreamID: wsID, tmuxPath: tmuxPath, project: projName, workstream: wsName)
+                        }
                     }
                 }
                 projects.removeAll()
@@ -307,6 +312,11 @@ struct ContentView: View {
                         for ws in project.workstreams {
                             surfaceCache.removeWorkstreamSurfaces(for: ws.id)
                             agentStateTracker.clear(workstreamID: ws.id)
+                            let wsID = ws.id, projName = project.name, wsName = ws.name
+                            let tmuxPath = appEnvironment.toolStatus.tmux.path
+                            Task.detached {
+                                WorkstreamArchiver.killRunProcesses(workstreamID: wsID, tmuxPath: tmuxPath, project: projName, workstream: wsName)
+                            }
                         }
                     }
                 }

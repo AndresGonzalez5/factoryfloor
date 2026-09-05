@@ -20,7 +20,13 @@ enum FilePersistence {
         let tempURL = directory.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
         do {
             try data.write(to: tempURL)
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
+            do {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
+            } catch {
+                // replaceItemAt fails when the destination does not exist yet
+                // (e.g. the first ff-run state write). Fall back to a move.
+                try FileManager.default.moveItem(at: tempURL, to: url)
+            }
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
             // Clean up temp file on failure

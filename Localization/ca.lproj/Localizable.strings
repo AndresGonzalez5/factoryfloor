@@ -279,6 +279,20 @@
 "No dev command found. Add a dev script to package.json or set one below." = "No s'ha trobat cap ordre de desenvolupament. Afegeix un script dev a package.json o configura'n un a sota.";
 "Press ⌘B to start the dev server and open a browser tab." = "Premeu ⌘B per iniciar el servidor de desenvolupament i obrir una pestanya del navegador.";
 
+/* Dev server status */
+"Running" = "En marxa";
+"Running on localhost:%@" = "En marxa a localhost:%@";
+"Starting…" = "S'està iniciant…";
+"Stopped unexpectedly" = "S'ha aturat inesperadament";
+"Stopped unexpectedly. Press Start to run it again." = "S'ha aturat inesperadament. Prem Start per tornar-lo a executar.";
+"Stays running after browser tabs close" = "Continua en marxa quan es tanquen les pestanyes del navegador";
+"Stops when the last browser tab closes" = "S'atura quan es tanca l'última pestanya del navegador";
+"Using port %@ instead of %@. The dev command may ignore $FF_PORT; a leftover server may still hold the expected port." = "Utilitza el port %@ en lloc de %@. És possible que l'ordre ignori $FF_PORT; un servidor antic encara pot estar ocupant el port esperat.";
+"Tip: make your dev command listen on $FF_PORT to keep the port stable." = "Consell: fes que l'ordre escolti a $FF_PORT per mantenir el port estable.";
+"Dev server moved to %@" = "El servidor de desenvolupament s'ha mogut a %@";
+"Dev server stopped" = "Servidor de desenvolupament aturat";
+"Switch" = "Canvia";
+
 /* Tab labels */
 "Info" = "Informació";
 "Agent" = "Agent";

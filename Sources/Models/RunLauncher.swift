@@ -25,9 +25,9 @@ enum RunLauncher {
     }
 }
 
-func runScriptCommand(script: String, workstreamID: UUID, launcherPath: String, shell: String = CommandBuilder.userShell) -> String {
+func runScriptCommand(script: String, workstreamID: UUID, launcherPath: String, shell: String = CommandBuilder.userShell, generation: Int = 0) -> String {
     let workstream = workstreamID.uuidString.lowercased()
     let quotedLauncher = CommandBuilder.shellQuote(launcherPath)
     let quotedScript = CommandBuilder.shellQuote(script, forShell: shell)
-    return "\(quotedLauncher) --workstream-id \(workstream) -- \(shell) -lic \(quotedScript)"
+    return "\(quotedLauncher) --workstream-id \(workstream) --generation \(generation) -- \(shell) -lic \(quotedScript)"
 }

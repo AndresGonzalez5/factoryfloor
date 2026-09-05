@@ -279,6 +279,20 @@
 "No dev command found. Add a dev script to package.json or set one below." = "No dev command found. Add a dev script to package.json or set one below.";
 "Press ⌘B to start the dev server and open a browser tab." = "Press ⌘B to start the dev server and open a browser tab.";
 
+/* Dev server status */
+"Running" = "Running";
+"Running on localhost:%@" = "Running on localhost:%@";
+"Starting…" = "Starting…";
+"Stopped unexpectedly" = "Stopped unexpectedly";
+"Stopped unexpectedly. Press Start to run it again." = "Stopped unexpectedly. Press Start to run it again.";
+"Stays running after browser tabs close" = "Stays running after browser tabs close";
+"Stops when the last browser tab closes" = "Stops when the last browser tab closes";
+"Using port %@ instead of %@. The dev command may ignore $FF_PORT; a leftover server may still hold the expected port." = "Using port %@ instead of %@. The dev command may ignore $FF_PORT; a leftover server may still hold the expected port.";
+"Tip: make your dev command listen on $FF_PORT to keep the port stable." = "Tip: make your dev command listen on $FF_PORT to keep the port stable.";
+"Dev server moved to %@" = "Dev server moved to %@";
+"Dev server stopped" = "Dev server stopped";
+"Switch" = "Switch";
+
 /* Tab labels */
 "Info" = "Info";
 "Agent" = "Agent";
