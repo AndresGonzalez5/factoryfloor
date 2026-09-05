@@ -865,6 +865,43 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNotEqual(fpEdited, fpUntracked, "branch-mode fingerprint must change when an untracked file is added")
     }
 
+    // MARK: - Per-file delete helpers (Changes tab)
+
+    private func makeRepoWithFiles() throws -> URL {
+        let repoDir = tempDir.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "tracked\n".write(to: repoDir.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+        try "new\n".write(to: repoDir.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+        return repoDir
+    }
+
+    func testIsUntrackedFileDistinguishesTrackedFromUntracked() throws {
+        let repo = try makeRepoWithFiles()
+        XCTAssertFalse(GitOperations.isUntrackedFile(at: repo.path, filePath: "tracked.txt"))
+        XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "untracked.txt"))
+        XCTAssertFalse(GitOperations.isUntrackedFile(at: repo.path, filePath: "missing.txt"))
+    }
+
+    func testDiscardFileChangesRestoresTrackedFile() throws {
+        let repo = try makeRepoWithFiles()
+        try "modified\n".write(to: repo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        GitOperations.discardFileChanges(at: repo.path, filePath: "tracked.txt")
+        let content = try String(contentsOf: repo.appendingPathComponent("tracked.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "tracked\n")
+        XCTAssertTrue(gitOutput(["status", "--porcelain"], in: repo).contains("??"))
+    }
+
+    func testDiscardFileChangesLeavesUntrackedFileAlone() throws {
+        let repo = try makeRepoWithFiles()
+        GitOperations.discardFileChanges(at: repo.path, filePath: "untracked.txt")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repo.appendingPathComponent("untracked.txt").path))
+        XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "untracked.txt"))
+    }
+
     // MARK: - Helpers
 
     @discardableResult

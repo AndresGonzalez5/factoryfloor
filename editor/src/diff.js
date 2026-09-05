@@ -35,13 +35,21 @@ const STR = {
   collapseSection: 'Collapse file',
   expandSection: 'Expand file',
   markViewed: 'Mark as viewed',
-  viewed: 'Viewed'
+  viewed: 'Viewed',
+  save: 'Save',
+  openInEditor: 'Open in Editor',
+  unsavedChanges: 'Unsaved changes'
 }
 
 // Active sections keyed by file path:
 // { section, host, editor, original, modified, file, mountable, mounted,
-//   diffFired, collapsed, gen }
+//   diffFired, collapsed, gen, dirty, cleanVersionId, contentListener,
+//   syncEditUI }
 const sections = new Map()
+// Path of the last-focused modified editor (sticky: updated on focus, never
+// cleared on blur) so Cmd+S can save the file being typed in without a click.
+// Reset on every setFiles/clear alongside the sections it points into.
+let focusedPath = null
 // Paths (current generation) awaiting their first diff before contentReady.
 let pendingVisible = new Set()
 let reported = false
@@ -107,12 +115,14 @@ function resizeDiffEditor(diffEditor, host, gen) {
 }
 
 function disposeEditor(entry) {
+  if (entry.contentListener) entry.contentListener.dispose()
   if (entry.editor) entry.editor.dispose()
   if (entry.original) entry.original.dispose()
   if (entry.modified) entry.modified.dispose()
   entry.editor = null
   entry.original = null
   entry.modified = null
+  entry.contentListener = null
   entry.mounted = false
 }
 
@@ -126,6 +136,7 @@ function clearDiffs() {
   for (const entry of sections.values()) disposeSection(entry)
   sections.clear()
   pendingVisible.clear()
+  focusedPath = null
   // Remove every child except the empty-state placeholder.
   for (const child of Array.from(container.children)) {
     if (child !== emptyState) child.remove()
@@ -149,7 +160,13 @@ function mountEditor(entry) {
   const original = monaco.editor.createModel(file.originalText ?? '', file.languageId || 'plaintext')
   const modified = monaco.editor.createModel(file.modifiedText ?? '', file.languageId || 'plaintext')
 
-  const diffEditor = monaco.editor.createDiffEditor(host, sharedDiffOptions)
+  // Uncommitted-mode files are editable in place (VS Code Source Control
+  // style): only the modified side is writable, the original stays read-only.
+  const editable = !!file.editable && file.status !== 'D'
+  const options = editable
+    ? { ...sharedDiffOptions, readOnly: false, originalEditable: false }
+    : sharedDiffOptions
+  const diffEditor = monaco.editor.createDiffEditor(host, options)
   diffEditor.setModel({ original, modified })
 
   // handleMouseWheel is off so vertical wheel events bubble to the page (the
@@ -177,6 +194,27 @@ function mountEditor(entry) {
   entry.mounted = true
   if (farObserver && host.isConnected) farObserver.observe(host)
 
+  // Dirty tracking for editable files: version-id compare (same technique as
+  // main.js), reported to Swift so it can show progress + guard refreshes.
+  // Typing also resizes the host immediately so the page grows with the edit
+  // instead of waiting for the diff recompute.
+  if (editable) {
+    entry.cleanVersionId = modified.getAlternativeVersionId()
+    entry.dirty = false
+    // Sticky focus tracking for Cmd+S (dropped with the editor on dispose).
+    diffEditor.getModifiedEditor().onDidFocus(() => { focusedPath = file.filePath })
+    entry.contentListener = modified.onDidChangeModelContent(() => {
+      if (entry.gen !== jsGeneration) return
+      const dirty = modified.getAlternativeVersionId() !== entry.cleanVersionId
+      if (dirty !== entry.dirty) {
+        entry.dirty = dirty
+        if (entry.syncEditUI) entry.syncEditUI()
+        postToSwift({ type: 'contentChanged', filePath: file.filePath, dirty })
+      }
+      resizeDiffEditor(diffEditor, host, gen)
+    })
+  }
+
   // onDidUpdateDiff can fire multiple times per editor (layout, folding);
   // only the first firing counts toward contentReady.
   diffEditor.onDidUpdateDiff(() => {
@@ -192,8 +230,10 @@ function mountEditor(entry) {
 
 // Free a far-off-screen editor. The host keeps its measured pixel height, so
 // disposal is scroll-position neutral; the mount observer remounts on return.
+// Dirty (unsaved) editors are NEVER unmounted — disposal would drop the edit.
 function unmountEditor(entry) {
   if (!entry.mounted) return
+  if (entry.dirty) return
   if (entry.host) {
     if (mountObserver) mountObserver.unobserve(entry.host)
     if (farObserver) farObserver.unobserve(entry.host)
@@ -252,6 +292,7 @@ function ensureObservers() {
 function makeHeader(file, entry) {
   const header = document.createElement('div')
   header.className = 'diff-header'
+  entry.headerEl = header
 
   // Collapse chevron (GitHub-style per-file collapse).
   const chevron = document.createElement('button')
@@ -317,6 +358,13 @@ function makeHeader(file, entry) {
   copy.appendChild(checkIcon)
   header.appendChild(copy)
 
+  // Inline-edit controls (VS Code Source Control style). Only for editable
+  // files with loaded content — deleted/binary/deferred placeholders never
+  // get them here. Deferred files get them on upgrade (see loadFileContent).
+  if (isEditCapable(file) && !file.deferred) {
+    addEditControls(header, file, entry, null)
+  }
+
   // Viewed checkbox (right-aligned, GitHub-style). State persists in Swift;
   // Swift clears it when the file's content changes under the mark.
   const viewedWrap = document.createElement('label')
@@ -340,6 +388,61 @@ function makeHeader(file, entry) {
   entry.viewedBox = viewedBox
 
   return header
+}
+
+// Whether a file can ever show inline-edit controls: flagged editable by
+// Swift (uncommitted mode) and not deleted/binary. Deferred files qualify —
+// their controls are added on upgrade once real content is loaded.
+function isEditCapable(file) {
+  return !!file.editable && file.status !== 'D' && !file.binary
+}
+
+// Build the Save / dirty-dot / Open-in-Editor header controls. `before` is
+// an optional child to insert ahead of (used on deferred upgrade, where the
+// Viewed checkbox already exists).
+function addEditControls(header, file, entry, before) {
+  if (entry.syncEditUI) return
+  const dirtyDot = document.createElement('span')
+  dirtyDot.className = 'dirty-dot'
+  dirtyDot.textContent = '●'
+  dirtyDot.title = STR.unsavedChanges
+  dirtyDot.setAttribute('aria-label', STR.unsavedChanges)
+  dirtyDot.hidden = true
+
+  const save = document.createElement('button')
+  save.className = 'save-btn'
+  save.type = 'button'
+  save.textContent = STR.save
+  save.title = STR.unsavedChanges
+  save.disabled = true
+  save.addEventListener('click', () => {
+    postToSwift({ type: 'saveFile', filePath: file.filePath })
+  })
+
+  const open = document.createElement('button')
+  open.className = 'open-btn'
+  open.type = 'button'
+  open.textContent = '↗'
+  open.title = STR.openInEditor
+  open.setAttribute('aria-label', STR.openInEditor)
+  open.addEventListener('click', () => {
+    postToSwift({ type: 'openInEditor', filePath: file.filePath })
+  })
+
+  if (before) {
+    header.insertBefore(dirtyDot, before)
+    header.insertBefore(save, before)
+    header.insertBefore(open, before)
+  } else {
+    header.appendChild(dirtyDot)
+    header.appendChild(save)
+    header.appendChild(open)
+  }
+
+  entry.syncEditUI = () => {
+    save.disabled = !entry.dirty
+    dirtyDot.hidden = !entry.dirty
+  }
 }
 
 function setCollapsed(entry, collapsed, notify) {
@@ -522,6 +625,11 @@ window.diffAPI = {
     const host = makePlaceholderHost(entry, entry.file)
     section.appendChild(host)
     entry.collapseBody = host
+    // Deferred files flagged editable gain their Save/Open controls now that
+    // real content exists. Insert ahead of the Viewed checkbox (last child).
+    if (isEditCapable(entry.file) && entry.headerEl) {
+      addEditControls(entry.headerEl, entry.file, entry, entry.headerEl.lastChild)
+    }
     if (entry.collapsed) return
     mountEditor(entry)
     if (mountObserver && host.isConnected) mountObserver.observe(host)
@@ -552,6 +660,41 @@ window.diffAPI = {
     for (const entry of sections.values()) {
       if (entry.editor) entry.editor.layout()
     }
+  },
+
+  // Current modified-side text for a file: live editor content when mounted,
+  // otherwise the last loaded text. Swift reads this to persist an edit.
+  getContent(path) {
+    const entry = sections.get(path)
+    if (!entry) return null
+    if (entry.mounted && entry.modified) return entry.modified.getValue()
+    return entry.file.modifiedText ?? null
+  },
+
+  // Ordered save targets for Cmd+S: the focused dirty file wins (the one
+  // being typed in); else the selected tree file when dirty; else every dirty
+  // file — an explicit Save persists all Changes-tab work. Empty when clean.
+  saveTargets(selectedPath) {
+    const dirty = []
+    for (const [path, entry] of sections) {
+      if (entry.dirty) dirty.push(path)
+    }
+    if (dirty.length === 0) return []
+    if (focusedPath) {
+      const focused = sections.get(focusedPath)
+      if (focused && focused.dirty) return [focusedPath]
+    }
+    if (selectedPath && dirty.includes(selectedPath)) return [selectedPath]
+    return dirty
+  },
+
+  // Mark a model as clean (after save).
+  markClean(path) {
+    const entry = sections.get(path)
+    if (!entry || !entry.mounted || !entry.modified) return
+    entry.cleanVersionId = entry.modified.getAlternativeVersionId()
+    entry.dirty = false
+    if (entry.syncEditUI) entry.syncEditUI()
   },
 
   // Set one file's Viewed checkbox from Swift (e.g. clearing a stale mark).

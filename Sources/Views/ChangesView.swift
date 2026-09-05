@@ -23,10 +23,11 @@ private final class ChangesLoadBox: @unchecked Sendable {
 
 /// The diff scope shown by the Changes tab.
 enum ChangesMode: String, CaseIterable {
+    /// Working-tree changes vs HEAD (plus untracked files). The default: this
+    /// is what you watch while an agent is working.
+    case uncommitted
     /// Everything that differs between merge-base(defaultBranch, HEAD) and the worktree.
     case branch
-    /// Working-tree changes vs HEAD (plus untracked files).
-    case uncommitted
 
     var label: String {
         switch self {
@@ -44,11 +45,16 @@ struct ChangesView: View {
     let workingDirectory: String
     let projectDirectory: String
     let bridge: MonacoDiffBridge
+    /// Open a file in a full Editor tab (wired by the workspace container).
+    var onOpenInEditor: ((String) -> Void)? = nil
+    /// Reports whether ANY diff edit is unsaved (wired by the workspace
+    /// container to drive the Save menu item state).
+    var onDirtyChanged: ((Bool) -> Void)? = nil
 
     @State private var isLoading = true
     @State private var isRefreshing = false
     @State private var fileCount = 0
-    @State private var mode: ChangesMode = .branch
+    @State private var mode: ChangesMode = .uncommitted
     /// Short base-range label for the toolbar (e.g. "main…a1b2c3d"), resolved
     /// with the same load that builds the payload. Empty while loading.
     @State private var baseLabel = ""
@@ -74,16 +80,28 @@ struct ChangesView: View {
     /// identity, distinct from the short toolbar label).
     @State private var contentBaseRef = "HEAD"
 
+    /// Paths with unsaved inline edits in the diff (mirrors `bridge.dirtyPaths`,
+    /// which is the copy that survives tab switches rebuilding this struct).
+    @State private var dirtyPaths: Set<String> = []
+    /// Paths currently being written to disk (re-entrant Save guard).
+    @State private var savingPaths: Set<String> = []
+    /// File awaiting delete confirmation (nil = no alert). The Trash vs
+    /// Discard wording resolves via `pendingDeleteUntracked` before showing.
+    @State private var pendingDelete: DiffFile?
+    @State private var pendingDeleteUntracked = false
+
     /// Live width of the files-changed sidebar. Init from UserDefaults so it
     /// survives tab switches and relaunches; a divider DragGesture commits the
     /// final value on release.
     @State private var sidebarWidth: Double
 
-    init(workstreamID: UUID, workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge) {
+    init(workstreamID: UUID, workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge, onOpenInEditor: ((String) -> Void)? = nil, onDirtyChanged: ((Bool) -> Void)? = nil) {
         self.workstreamID = workstreamID
         self.workingDirectory = workingDirectory
         self.projectDirectory = projectDirectory
         self.bridge = bridge
+        self.onOpenInEditor = onOpenInEditor
+        self.onDirtyChanged = onDirtyChanged
         _sidebarWidth = State(initialValue: Self.loadSidebarWidth())
     }
 
@@ -117,6 +135,12 @@ struct ChangesView: View {
                             isEnabled: !isBusy,
                             onSelect: { path in
                                 bridge.scrollToFile(path)
+                            },
+                            onOpenInEditor: { path in
+                                onOpenInEditor?(path)
+                            },
+                            onDelete: { file in
+                                requestDelete(file)
                             }
                         )
                         // Dim + block interaction while (re)loading; the stale
@@ -149,6 +173,10 @@ struct ChangesView: View {
             // Make sure the bridge can resolve content for click-to-load before
             // any deferred-file click can happen.
             configureLoadHandler(files: bridge.lastDiffFiles)
+            // The bridge outlives this struct across tab switches; restore any
+            // unsaved-edit marks so refresh guards stay correct.
+            dirtyPaths = bridge.dirtyPaths
+            onDirtyChanged?(!dirtyPaths.isEmpty)
 
             if bridge.hasContent && bridge.lastMode == mode.rawValue {
                 // Cached content exists for this mode — show it, refresh in background.
@@ -180,6 +208,47 @@ struct ChangesView: View {
             guard !isBusy else { return }
             backgroundRefreshIfNeeded()
         }
+        // Cmd+S (Save menu): persist diff edits without reaching for the mouse.
+        .onReceive(NotificationCenter.default.publisher(for: .saveEditor)) { _ in
+            saveViaKeyboard()
+        }
+        .alert(
+            pendingDeleteUntracked ? "Move to Trash" : "Discard Changes",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button(
+                pendingDeleteUntracked ? "Move to Trash" : "Discard",
+                role: .destructive
+            ) {
+                if let file = pendingDelete {
+                    performDelete(file, untracked: pendingDeleteUntracked)
+                }
+            }
+        } message: {
+            if let file = pendingDelete {
+                if pendingDeleteUntracked {
+                    Text(String(
+                        format: NSLocalizedString(
+                            "\"%@\" is untracked and will be moved to the Trash.",
+                            comment: "Changes tab: untracked file delete confirmation"
+                        ),
+                        file.relativePath
+                    ))
+                } else {
+                    Text(String(
+                        format: NSLocalizedString(
+                            "Discard all uncommitted changes to \"%@\"? This cannot be undone.",
+                            comment: "Changes tab: tracked file discard confirmation"
+                        ),
+                        file.relativePath
+                    ))
+                }
+            }
+        }
     }
 
     // MARK: - Toolbar
@@ -196,6 +265,10 @@ struct ChangesView: View {
             .frame(width: 170)
             .opacity(0.85)
             .labelsHidden()
+            // Mode switches rebuild every editor: block while edits are
+            // unsaved rather than silently dropping them.
+            .disabled(!dirtyPaths.isEmpty)
+            .help(dirtyPaths.isEmpty ? Text(mode.label) : Text("Save your edits before switching modes"))
 
             if isRefreshing {
                 ProgressView()
@@ -223,6 +296,14 @@ struct ChangesView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(Text(baseLabel))
+                }
+                if !dirtyPaths.isEmpty {
+                    Text("•")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.orange)
+                    Text("Unsaved changes")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.orange)
                 }
             }
 
@@ -272,7 +353,7 @@ struct ChangesView: View {
             .controlSize(.small)
             .help(Text("Refresh changes"))
             .accessibilityLabel(Text("Refresh changes"))
-            .disabled(isLoading || isRefreshing)
+            .disabled(isLoading || isRefreshing || !dirtyPaths.isEmpty)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -343,6 +424,11 @@ struct ChangesView: View {
         contentBaseRef = base
         versionMap = versions
         viewedPaths = viewed
+        // setFiles rebuilds every JS model from scratch, so any edit state is
+        // clean by construction. Loads only happen while clean (refresh, mode
+        // switch, and revisit paths all gate on dirtyPaths), so this is a
+        // safety net, not a data-loss path.
+        clearAllDirty()
         bridge.lastFileCount = payload.count
         bridge.lastDiffFiles = contents.files
         bridge.lastFingerprint = fingerprint
@@ -404,6 +490,130 @@ struct ChangesView: View {
                 path: path
             )
         }
+        bridge.onContentChanged = { path, dirty in
+            setDirty(path, dirty: dirty)
+        }
+        bridge.onSaveFile = { path in
+            saveFile(path)
+        }
+        bridge.onOpenInEditor = { [onOpenInEditor] path in
+            onOpenInEditor?(path)
+        }
+    }
+
+    // MARK: - Inline edit + delete
+
+    /// Single funnel for dirty-state changes: keeps the @State mirror and the
+    /// bridge copy (which survives tab switches) in sync, and pushes the
+    /// any-dirty bit to the workspace container for the Save menu item.
+    private func setDirty(_ path: String, dirty: Bool) {
+        if dirty {
+            dirtyPaths.insert(path)
+            bridge.dirtyPaths.insert(path)
+        } else {
+            dirtyPaths.remove(path)
+            bridge.dirtyPaths.remove(path)
+        }
+        onDirtyChanged?(!dirtyPaths.isEmpty)
+    }
+
+    /// Clear all dirty marks (fresh setFiles content is clean by construction).
+    private func clearAllDirty() {
+        dirtyPaths.removeAll()
+        bridge.dirtyPaths.removeAll()
+        onDirtyChanged?(false)
+    }
+
+    /// Cmd+S: save the focused dirty file, else the selected dirty file, else
+    /// all dirty files. Target order resolves in JS against live editor state,
+    /// so a keypress racing the contentChanged message still hits the file
+    /// being typed in.
+    private func saveViaKeyboard() {
+        let selected = selectedFilePath
+        Task {
+            for path in await bridge.saveTargets(selected: selected) {
+                saveFile(path)
+            }
+        }
+    }
+
+    /// Persist one file's inline diff edit to the worktree. Reads the live
+    /// modified-side text from JS, writes it atomically, then clears the dirty
+    /// mark. Refreshes only when nothing else is unsaved — a reload rebuilds
+    /// every editor and would drop other unsaved edits.
+    private func saveFile(_ path: String) {
+        guard !savingPaths.contains(path) else { return }
+        savingPaths.insert(path)
+        let workDir = workingDirectory
+        Task {
+            let text = await bridge.getContent(filePath: path)
+            guard let text else {
+                await MainActor.run { savingPaths.remove(path) }
+                return
+            }
+            let saved = await Task.detached(priority: .userInitiated) { () -> Bool in
+                let fullPath = (workDir as NSString).appendingPathComponent(path)
+                do {
+                    try text.write(toFile: fullPath, atomically: true, encoding: .utf8)
+                    return true
+                } catch {
+                    return false
+                }
+            }.value
+            await MainActor.run {
+                savingPaths.remove(path)
+                guard saved else { return }
+                bridge.markClean(filePath: path)
+                setDirty(path, dirty: false)
+                if dirtyPaths.isEmpty {
+                    backgroundRefreshIfNeeded()
+                }
+            }
+        }
+    }
+
+    /// Start the git-aware delete flow for a tree file: resolve Trash (untracked)
+    /// vs Discard (tracked) off the main thread, then show the confirmation.
+    private func requestDelete(_ file: DiffFile) {
+        let workDir = workingDirectory
+        let path = file.relativePath
+        Task {
+            let untracked = await Task.detached(priority: .userInitiated) {
+                GitOperations.isUntrackedFile(at: workDir, filePath: path)
+            }.value
+            await MainActor.run {
+                pendingDelete = file
+                pendingDeleteUntracked = untracked
+            }
+        }
+    }
+
+    /// Carry out a confirmed delete: trash untracked files, restore tracked
+    /// ones from HEAD. Clears any unsaved-edit mark for the path, then reloads.
+    private func performDelete(_ file: DiffFile, untracked: Bool) {
+        pendingDelete = nil
+        let workDir = workingDirectory
+        let path = file.relativePath
+        Task {
+            await Task.detached(priority: .userInitiated) {
+                if untracked {
+                    let url = URL(
+                        fileURLWithPath: (workDir as NSString).appendingPathComponent(path)
+                    )
+                    try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                } else {
+                    GitOperations.discardFileChanges(at: workDir, filePath: path)
+                }
+            }.value
+            await MainActor.run {
+                setDirty(path, dirty: false)
+                GitOperations.invalidateRefCaches()
+                bridge.lastFingerprint = nil
+                if dirtyPaths.isEmpty {
+                    backgroundRefreshIfNeeded()
+                }
+            }
+        }
     }
 
     // MARK: - Full load (first visit, mode switch, or explicit refresh)
@@ -460,6 +670,9 @@ struct ChangesView: View {
         // Never overlap loads; the timer + onAppear can both fire. Stale
         // `loadTask` handles are cancelled outright — only `isBusy` gates.
         guard !isBusy else { return }
+        // Never reload under unsaved inline edits: setFiles rebuilds every
+        // editor and would drop them. The timer retries once the user saves.
+        guard dirtyPaths.isEmpty else { return }
         loadTask?.cancel()
         loadGeneration += 1
         let generation = loadGeneration
@@ -738,6 +951,11 @@ struct ChangesView: View {
                 "status": file.status.rawValue,
                 "languageId": MonacoLanguage.id(for: (file.relativePath as NSString).lastPathComponent),
                 "changedLines": file.changedLines,
+                // Inline editing is uncommitted-mode only (branch stays a
+                // read-only review) and never applies to deletions, which have
+                // no modified side. Binary/deferred placeholders ignore the
+                // flag until real content is loaded.
+                "editable": mode == .uncommitted && file.status != .deleted,
             ]
 
             switch classes[index] {

@@ -174,7 +174,7 @@ Factory Floor is keyboard-first. Here's everything.
 | ⌘B | New Browser (starts the dev server) |
 | ⌘O | New Editor |
 | ⌘P | Find File (Editor) |
-| ⌘S | Save (Editor) |
+| ⌘S | Save (Editor, Changes) |
 | ⌘Shift+S | Save As (Editor) |
 | ⌘W | Close tab |
 | ⌘Shift+W | Archive workstream |

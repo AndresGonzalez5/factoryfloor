@@ -455,3 +455,14 @@
 "Open Pull Request" = "Open Pull Request";
 "Open Link" = "Open Link";
 "Working…" = "Working…";
+
+/* Changes tab: inline edit + delete */
+"Open in Editor" = "Open in Editor";
+"Delete…" = "Delete…";
+"Move to Trash" = "Move to Trash";
+"Discard Changes" = "Discard Changes";
+"Discard" = "Discard";
+"\"%@\" is untracked and will be moved to the Trash." = "\"%@\" is untracked and will be moved to the Trash.";
+"Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Discard all uncommitted changes to \"%@\"? This cannot be undone.";
+"Unsaved changes" = "Unsaved changes";
+"Save your edits before switching modes" = "Save your edits before switching modes";

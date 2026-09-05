@@ -164,7 +164,7 @@ other = "Copy File Path (Editor)"
 [sc_find_file]
 other = "Find File (Editor)"
 [sc_save]
-other = "Save (Editor)"
+other = "Save (Editor, Changes)"
 [sc_save_as]
 other = "Save As (Editor)"
 [sc_ext_browser]

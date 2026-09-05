@@ -326,6 +326,8 @@ struct TerminalContainerView: View {
     @AppStorage("factoryfloor.quickActionDebug") private var quickActionDebug: Bool = false
     @AppStorage("factoryfloor.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("factoryfloor.editorFileDirty") private var editorFileDirty: Bool = false
+    @AppStorage("factoryfloor.changesTabActive") private var changesTabActive: Bool = false
+    @AppStorage("factoryfloor.changesDirty") private var changesDirty: Bool = false
     @State private var activeTab: WorkspaceTab = .info
     @State private var tabs: [WorkspaceTab] = [.info, .agent]
     @State private var terminalCount = 0
@@ -336,6 +338,7 @@ struct TerminalContainerView: View {
     @State private var terminalTitles: [UUID: String] = [:]
     @State private var editorFilePaths: [UUID: String] = [:]
     @State private var editorDirtyState: [UUID: Bool] = [:]
+    @State private var changesDirtyState: Bool = false
     @State private var editorBridge: MonacoEditorBridge?
     @State private var diffBridge: MonacoDiffBridge?
     @State private var fileTree: [FileNode] = []
@@ -434,6 +437,21 @@ struct TerminalContainerView: View {
     private var isActiveEditorDirty: Bool {
         if case let .editor(id) = activeTab { return editorDirtyState[id] == true }
         return false
+    }
+
+    private var isChangesTabActive: Bool {
+        if case .changes = activeTab { return true }
+        return false
+    }
+
+    /// Push the Save-menu state for both lanes (Editor file, Changes diff) to
+    /// the AppStorage flags FF2App reads. Only the front workspace writes them.
+    private func syncMenuFlags() {
+        guard isActive else { return }
+        editorTabActive = isEditorTabActive
+        editorFileDirty = isActiveEditorDirty
+        changesTabActive = isChangesTabActive
+        changesDirty = isChangesTabActive && changesDirtyState
     }
 
     /// Surface IDs that should be rendering for the active tab.
@@ -822,7 +840,12 @@ struct TerminalContainerView: View {
                     workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
                     projectDirectory: projectDirectory,
-                    bridge: bridge
+                    bridge: bridge,
+                    onOpenInEditor: { [self] path in addEditor(filePath: path) },
+                    onDirtyChanged: { [self] dirty in
+                        changesDirtyState = dirty
+                        syncMenuFlags()
+                    }
                 )
             } else {
                 ProgressView()
@@ -1001,10 +1024,7 @@ struct TerminalContainerView: View {
             }
         }
         .onAppear {
-            if isActive {
-                editorTabActive = isEditorTabActive
-                editorFileDirty = isActiveEditorDirty
-            }
+            syncMenuFlags()
             if tabs.contains(where: { if case .editor = $0 { return true } else { return false } }) {
                 startFileTreeWatcherIfNeeded()
             }
@@ -1013,6 +1033,8 @@ struct TerminalContainerView: View {
             if isActive {
                 editorTabActive = false
                 editorFileDirty = false
+                changesTabActive = false
+                changesDirty = false
             }
             guard workspaceStarted else { return }
             surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
@@ -1022,8 +1044,7 @@ struct TerminalContainerView: View {
                 browserLastDefaultURLs[id] = browserDefaultURL
             }
             guard isActive else { return }
-            editorTabActive = isEditorTabActive
-            editorFileDirty = isActiveEditorDirty
+            syncMenuFlags()
             surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
             WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: activeTab), for: workstreamID)
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
@@ -1162,6 +1183,8 @@ struct TerminalContainerView: View {
             .onChange(of: isActive) { _, active in
                 editorTabActive = active && isEditorTabActive
                 editorFileDirty = active && isActiveEditorDirty
+                changesTabActive = active && isChangesTabActive
+                changesDirty = active && isChangesTabActive && changesDirtyState
                 if active {
                     surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
                 } else {

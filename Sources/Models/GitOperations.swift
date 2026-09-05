@@ -795,6 +795,29 @@ enum GitOperations {
         _ = run(args: ["clean", "-fd"], in: path)
     }
 
+    /// Whether a worktree-relative file is untracked (present on disk but known
+    /// to neither HEAD nor the index). The Changes tab lists untracked files as
+    /// `.added`, so callers use this to pick Trash (untracked) vs Discard
+    /// (tracked) semantics for a per-file delete.
+    static func isUntrackedFile(at path: String, filePath: String) -> Bool {
+        guard let out = run(
+            args: ["ls-files", "--others", "--exclude-standard", "--", filePath],
+            in: path
+        ) else { return false }
+        return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Discard a single tracked file's uncommitted changes: unstage, then
+    /// restore the worktree copy from HEAD. Mirrors `discardAllChanges` scoped
+    /// to one path (same `reset` + `checkout` pair, so behavior matches).
+    /// No-op for untracked files (nothing to restore — trash those instead)
+    /// and for files staged-new (no HEAD version; `checkout` fails silently and
+    /// the file is left on disk as untracked, where Trash applies).
+    static func discardFileChanges(at path: String, filePath: String) {
+        _ = run(args: ["reset", "HEAD", "--", filePath], in: path)
+        _ = run(args: ["checkout", "--", filePath], in: path)
+    }
+
     private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {
         switch char {
         case "M": return .modified

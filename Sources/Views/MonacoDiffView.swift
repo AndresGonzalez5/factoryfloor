@@ -31,6 +31,13 @@ final class MonacoDiffBridge: ObservableObject {
     var onViewedChanged: ((_ filePath: String, _ viewed: Bool) -> Void)?
     /// Fired when a diff section collapses/expands in JS.
     var onCollapsedChanged: ((_ filePath: String, _ collapsed: Bool) -> Void)?
+    /// Fired when an editable file's dirty state changes in JS.
+    /// Parameters: (filePath, isDirty).
+    var onContentChanged: ((_ filePath: String, _ dirty: Bool) -> Void)?
+    /// Fired when a diff header's Save button is clicked in JS.
+    var onSaveFile: ((_ filePath: String) -> Void)?
+    /// Fired when a diff header's Open-in-Editor button is clicked in JS.
+    var onOpenInEditor: ((_ filePath: String) -> Void)?
 
     /// Review identity for the currently rendered content. Set per load by
     /// ChangesView so deferred content arriving later can validate viewed
@@ -67,6 +74,11 @@ final class MonacoDiffBridge: ObservableObject {
     /// so the Changes sidebar tree survives the SwiftUI view being re-created on
     /// a tab switch, matching `lastFileCount`/`hasContent`.
     var lastDiffFiles: [DiffFile] = []
+
+    /// Worktree-relative paths with unsaved inline edits in the diff. Lives on
+    /// the bridge (not @State) so it survives the SwiftUI view being rebuilt on
+    /// tab switches; ChangesView mirrors it into `dirtyPaths` for rendering.
+    var dirtyPaths: Set<String> = []
 
     /// Whether setFiles() has run at least once (cached content lives in the WebView).
     private(set) var hasContent = false
@@ -199,6 +211,55 @@ final class MonacoDiffBridge: ObservableObject {
         }
     }
 
+    /// Current modified-side text for a file (live editor content when the
+    /// section is mounted, otherwise the last loaded text). Used to persist
+    /// inline edits made in the diff. Nil when the webview isn't ready or the
+    /// file isn't rendered.
+    func getContent(filePath: String) async -> String? {
+        guard let webView, isReady else { return nil }
+        guard let json = Self.jsonString(fromString: filePath) else { return nil }
+        do {
+            return try await webView.evaluateJavaScript(
+                "window.diffAPI.getContent(\(json))"
+            ) as? String
+        } catch {
+            print("[MonacoDiff] getContent failed for \(filePath): \(error)")
+            return nil
+        }
+    }
+
+    /// Mark a file's model clean after its content was persisted (clears the
+    /// dirty dot and disables the Save button; JS keeps tracking from here).
+    func markClean(filePath: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            guard let json = Self.jsonString(fromString: filePath) else { return }
+            webView.evaluateJavaScript("window.diffAPI.markClean(\(json))")
+        }
+    }
+
+    /// Ordered save targets for Cmd+S, resolved in JS against live editor
+    /// state: focused dirty file, else the selected tree file when dirty, else
+    /// all dirty files. Empty when nothing is unsaved. Nil webview/ready also
+    /// yields empty (save is a no-op while the diff is still loading).
+    func saveTargets(selected: String?) async -> [String] {
+        guard let webView, isReady else { return [] }
+        do {
+            let arg: String
+            if let selected, let json = Self.jsonString(fromString: selected) {
+                arg = json
+            } else {
+                arg = "null"
+            }
+            return try await webView.evaluateJavaScript(
+                "window.diffAPI.saveTargets(\(arg))"
+            ) as? [String] ?? []
+        } catch {
+            print("[MonacoDiff] saveTargets failed: \(error)")
+            return []
+        }
+    }
+
     // MARK: - Ready state
 
     fileprivate func markReady() {
@@ -230,6 +291,9 @@ final class MonacoDiffBridge: ObservableObject {
             "expandSection": NSLocalizedString("Expand file", comment: "Changes diff header: expand file section"),
             "markViewed": NSLocalizedString("Mark as viewed", comment: "Changes diff header: mark file as viewed"),
             "viewed": NSLocalizedString("Viewed", comment: "Changes diff header: viewed checkbox label"),
+            "save": NSLocalizedString("Save", comment: "Changes diff header: save edited file button"),
+            "openInEditor": NSLocalizedString("Open in Editor", comment: "Changes diff header: open file in editor button"),
+            "unsavedChanges": NSLocalizedString("Unsaved changes", comment: "Changes diff header: unsaved changes indicator"),
         ]
         guard let json = Self.jsonString(from: strings) else { return }
         webView.evaluateJavaScript("window.diffAPI.setStrings(\(json))")
@@ -370,6 +434,20 @@ final class MonacoDiffBridge: ObservableObject {
                        let collapsed = body["collapsed"] as? Bool
                     {
                         self.bridge.onCollapsedChanged?(filePath, collapsed)
+                    }
+                case "contentChanged":
+                    if let filePath = body["filePath"] as? String,
+                       let dirty = body["dirty"] as? Bool
+                    {
+                        self.bridge.onContentChanged?(filePath, dirty)
+                    }
+                case "saveFile":
+                    if let filePath = body["filePath"] as? String {
+                        self.bridge.onSaveFile?(filePath)
+                    }
+                case "openInEditor":
+                    if let filePath = body["filePath"] as? String {
+                        self.bridge.onOpenInEditor?(filePath)
                     }
                 case "copyPath":
                     if let filePath = body["filePath"] as? String {
