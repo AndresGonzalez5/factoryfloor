@@ -289,6 +289,7 @@
 "Using port %@ instead of %@. The dev command may ignore $FF_PORT; a leftover server may still hold the expected port." = "Verwendet Port %@ statt %@. Der Befehl ignoriert möglicherweise $FF_PORT; ein alter Server belegt eventuell noch den erwarteten Port.";
 "Tip: make your dev command listen on $FF_PORT to keep the port stable." = "Tipp: Lasse deinen Dev-Befehl auf $FF_PORT lauschen, damit der Port stabil bleibt.";
 "Dev server moved to %@" = "Dev-Server umgezogen nach %@";
+"Dev server stopped" = "Dev-Server gestoppt";
 "Switch" = "Wechseln";
 
 /* Tab labels */

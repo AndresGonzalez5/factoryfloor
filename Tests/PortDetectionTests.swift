@@ -210,4 +210,133 @@ final class PortDetectionTests: XCTestCase {
             isWaitingForServer: false
         ))
     }
+
+    // MARK: - Tab-return reconciliation (changes missed while inactive)
+
+    func testAppearNavigatesWhenStaleOnOldServerURL() {
+        // Port changed while the tab was away; the tab still shows the old
+        // server URL, so returning auto-navigates like the live onChange path.
+        XCTAssertEqual(
+            browserAppearAction(
+                currentURL: "http://localhost:8080/",
+                displayedURL: "http://localhost:8080/",
+                previousDefaultURL: "http://localhost:8080/",
+                nextDefaultURL: "http://localhost:8081/",
+                connectionError: false,
+                isWaitingForServer: false
+            ),
+            .navigate("http://localhost:8081/")
+        )
+    }
+
+    func testAppearShowsBannerWhenUserNavigatedElsewhere() {
+        // The user browsed elsewhere, so returning must not yank them: offer
+        // a banner instead.
+        XCTAssertEqual(
+            browserAppearAction(
+                currentURL: "https://example.com/",
+                displayedURL: "https://example.com/",
+                previousDefaultURL: "http://localhost:8080/",
+                nextDefaultURL: "http://localhost:8081/",
+                connectionError: false,
+                isWaitingForServer: false
+            ),
+            .showMovedBanner("http://localhost:8081/")
+        )
+    }
+
+    func testAppearIgnoresUnchangedDefaultURL() {
+        // No change while away (e.g. plain Info round-trip): leave the tab,
+        // and the user's elsewhere navigation, alone.
+        XCTAssertEqual(
+            browserAppearAction(
+                currentURL: "https://example.com/",
+                displayedURL: "https://example.com/",
+                previousDefaultURL: "http://localhost:8080/",
+                nextDefaultURL: "http://localhost:8080/",
+                connectionError: false,
+                isWaitingForServer: false
+            ),
+            .none
+        )
+    }
+
+    func testAppearIgnoresMissingPreviousURL() {
+        // Nothing recorded (e.g. older session): never navigate on appear.
+        XCTAssertEqual(
+            browserAppearAction(
+                currentURL: "http://localhost:8080/",
+                displayedURL: "http://localhost:8080/",
+                previousDefaultURL: nil,
+                nextDefaultURL: "http://localhost:8081/",
+                connectionError: false,
+                isWaitingForServer: false
+            ),
+            .none
+        )
+    }
+
+    func testAppearIgnoresWhileWaiting() {
+        XCTAssertEqual(
+            browserAppearAction(
+                currentURL: "http://localhost:8080/",
+                displayedURL: "http://localhost:8080/",
+                previousDefaultURL: "http://localhost:8080/",
+                nextDefaultURL: "http://localhost:8081/",
+                connectionError: false,
+                isWaitingForServer: true
+            ),
+            .none
+        )
+    }
+
+    // MARK: - Stopped-server banner
+
+    func testStoppedBannerShowsOverCachedPage() {
+        // The misleading case: a rendered page that looks alive after an
+        // intentional stop.
+        XCTAssertTrue(shouldShowStoppedBanner(
+            serverStopped: true,
+            isWaitingForServer: false,
+            connectionError: false,
+            hasPageContent: true
+        ))
+    }
+
+    func testStoppedBannerHiddenWhileWaiting() {
+        XCTAssertFalse(shouldShowStoppedBanner(
+            serverStopped: true,
+            isWaitingForServer: true,
+            connectionError: false,
+            hasPageContent: true
+        ))
+    }
+
+    func testStoppedBannerHiddenOnceLoadFails() {
+        // The error view with Retry communicates it instead.
+        XCTAssertFalse(shouldShowStoppedBanner(
+            serverStopped: true,
+            isWaitingForServer: false,
+            connectionError: true,
+            hasPageContent: true
+        ))
+    }
+
+    func testStoppedBannerHiddenForFreshTab() {
+        XCTAssertFalse(shouldShowStoppedBanner(
+            serverStopped: true,
+            isWaitingForServer: false,
+            connectionError: false,
+            hasPageContent: false
+        ))
+    }
+
+    func testStoppedBannerHiddenWhenLive() {
+        XCTAssertFalse(shouldShowStoppedBanner(
+            serverStopped: false,
+            isWaitingForServer: false,
+            connectionError: false,
+            hasPageContent: true
+        ))
+    }
 }

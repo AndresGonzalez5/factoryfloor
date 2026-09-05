@@ -290,6 +290,7 @@
 "Using port %@ instead of %@. The dev command may ignore $FF_PORT; a leftover server may still hold the expected port." = "Utilitza el port %@ en lloc de %@. És possible que l'ordre ignori $FF_PORT; un servidor antic encara pot estar ocupant el port esperat.";
 "Tip: make your dev command listen on $FF_PORT to keep the port stable." = "Consell: fes que l'ordre escolti a $FF_PORT per mantenir el port estable.";
 "Dev server moved to %@" = "El servidor de desenvolupament s'ha mogut a %@";
+"Dev server stopped" = "Servidor de desenvolupament aturat";
 "Switch" = "Canvia";
 
 /* Tab labels */

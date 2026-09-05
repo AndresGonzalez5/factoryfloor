@@ -356,6 +356,10 @@ struct TerminalContainerView: View {
     @State private var runStarted = false
     @State private var runGeneration = 0
     @State private var runOwner: RunOwner = .none
+    /// Last seen dev-server URL per browser tab, recorded when leaving the
+    /// tab. BrowserView is destroyed while inactive, so it cannot observe
+    /// defaultURL changes via onChange; it reconciles from this on return.
+    @State private var browserLastDefaultURLs: [UUID: String] = [:]
     @State private var runCommandString: String?
     @State private var devCommandOverride: String?
     @State private var resolvedDevCommand: DevCommand?
@@ -475,6 +479,13 @@ struct TerminalContainerView: View {
     private var browserDefaultURL: String {
         let port = portDetector.selectedPort ?? workstreamPort
         return "http://localhost:\(port)/"
+    }
+
+    /// The dev server was intentionally stopped (a run command exists, nothing
+    /// is starting, nothing is live). Drives the browser tabs' stopped banner
+    /// so a cached page never silently poses as a live server.
+    private var isRunServerStopped: Bool {
+        resolvedRunCommand != nil && !runStarted && portDetector.status == .none && !browserStartPending
     }
 
     /// The run session's surface ID. Bumped on stop/restart so a fresh
@@ -859,7 +870,15 @@ struct TerminalContainerView: View {
                 environmentVars: terminalEnvVars
             )
         case let .browser(id):
-            BrowserView(defaultURL: browserDefaultURL, isWaitingForServer: isWaitingForServer, tabID: id, webView: surfaceCache.webView(for: id))
+            BrowserView(
+                defaultURL: browserDefaultURL,
+                isWaitingForServer: isWaitingForServer,
+                tabID: id,
+                webView: surfaceCache.webView(for: id),
+                previousDefaultURL: browserLastDefaultURLs[id],
+                serverStopped: isRunServerStopped,
+                onStartServer: { startRunIfNeeded() }
+            )
                 .id(id)
         case let .editor(id):
             if let bridge = editorBridge {
@@ -998,7 +1017,10 @@ struct TerminalContainerView: View {
             guard workspaceStarted else { return }
             surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
         }
-        .onChange(of: activeTab) {
+        .onChange(of: activeTab) { oldTab, _ in
+            if case let .browser(id) = oldTab {
+                browserLastDefaultURLs[id] = browserDefaultURL
+            }
             guard isActive else { return }
             editorTabActive = isEditorTabActive
             editorFileDirty = isActiveEditorDirty
@@ -1270,14 +1292,24 @@ struct TerminalContainerView: View {
     @MainActor
     private func doStartRun(owner: RunOwner = .info) {
         guard let command = resolvedRunCommand else { return }
-        stopRunSessionProcesses()
+        let oldRunID = runID
+        killRunProcessesAndStateFile()
         runStoppedManually = false
         runGeneration += 1
         runOwner = owner
         runCommandString = buildRunCommand(script: command, generation: runGeneration)
         runStarted = true
+        SurfaceEventLogger.logInfo(workstreamID: workstreamID, "run-start gen=\(runGeneration) owner=\(owner.rawValue) cmd=\(SurfaceEventLogger.preview(command))")
         markBrowserStartPending()
         preloadRunSurface()
+        // Destroy the retired surface after this render commits: removing it
+        // synchronously lets an in-flight terminal view recreate the retired
+        // generation (a zombie server whose state file the next cleanup then
+        // refuses to delete). The new generation already has its own surface.
+        let cache = surfaceCache
+        DispatchQueue.main.async {
+            cache.removeSurface(for: oldRunID)
+        }
         saveTabSnapshot()
         Telemetry.shared.track(
             "dev_server_start",
@@ -1288,20 +1320,35 @@ struct TerminalContainerView: View {
     }
 
     private func stopRun() {
-        stopRunSessionProcesses()
+        let oldGeneration = runGeneration
+        let oldRunID = runID
+        let priorState = RunStateStore.load(for: workstreamID)
+        // Flip UI state first so the next render unmounts the run terminal
+        // before its surface is destroyed: destroying first lets an in-flight
+        // update recreate the retired generation's surface (a zombie server
+        // that looks alive in browser tabs while Info shows stopped).
         runStoppedManually = true
         runStarted = false
         runOwner = .none
         browserStartPending = false
         runCommandString = nil
         runGeneration += 1
+        killRunProcessesAndStateFile()
+        let pidDescription = priorState.map { String($0.pid) } ?? "none"
+        let fileGenDescription = priorState?.generation.map { String($0) } ?? "none"
+        SurfaceEventLogger.logInfo(workstreamID: workstreamID, "run-stop oldGen=\(oldGeneration) newGen=\(runGeneration) pid=\(pidDescription) fileGen=\(fileGenDescription)")
+        let cache = surfaceCache
+        DispatchQueue.main.async {
+            cache.removeSurface(for: oldRunID)
+        }
         saveTabSnapshot()
     }
 
     private func restartRun() {
         guard resolvedRunCommand != nil else { return }
         let owner: RunOwner = runOwner == .none ? .info : runOwner
-        stopRunSessionProcesses()
+        let oldRunID = runID
+        killRunProcessesAndStateFile()
         runStoppedManually = false
         markBrowserStartPending()
         runGeneration += 1
@@ -1310,23 +1357,29 @@ struct TerminalContainerView: View {
             runCommandString = buildRunCommand(script: command, generation: runGeneration)
         }
         runStarted = true
+        SurfaceEventLogger.logInfo(workstreamID: workstreamID, "run-restart gen=\(runGeneration) owner=\(owner.rawValue)")
         preloadRunSurface()
+        let cache = surfaceCache
+        DispatchQueue.main.async {
+            cache.removeSurface(for: oldRunID)
+        }
         saveTabSnapshot()
     }
 
-    /// Kill the previous dev-server session's processes without flipping any
-    /// UI flags. Kills the tmux run session (when in tmux mode), the
-    /// recorded process tree (so daemonized grandchildren release the port),
-    /// the terminal surface, and this generation's state file — but never a
-    /// newer generation's file (see RunStateStore.removeIfGenerationMatches).
-    private func stopRunSessionProcesses() {
-        let oldGeneration = runGeneration
+    /// Kill the previous dev-server session's processes and state file without
+    /// flipping any UI flags or touching surfaces. Kills the tmux run session
+    /// (when in tmux mode), the recorded process tree (so daemonized
+    /// grandchildren release the port), and unconditionally removes this
+    /// workstream's state file: an explicit stop/start owns the file, unlike
+    /// the ff-run monitor's teardown which must only remove its own
+    /// generation (see RunStateStore.removeIfGenerationMatches) so a rapid
+    /// stop -> start cannot orphan the UI.
+    private func killRunProcessesAndStateFile() {
         killRunTmuxSession()
         if let state = RunStateStore.load(for: workstreamID) {
             RunProcessKiller.killTree(root: state.pid)
         }
-        RunStateStore.removeIfGenerationMatches(oldGeneration, for: workstreamID)
-        surfaceCache.removeSurface(for: runID)
+        RunStateStore.remove(for: workstreamID)
     }
 
     /// Marks the start so browser tabs hold the waiting overlay until a port
@@ -1594,6 +1647,7 @@ struct TerminalContainerView: View {
             surfaceCache.removeSurface(for: id)
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
+            browserLastDefaultURLs.removeValue(forKey: id)
             // Only browser-owned servers stop with the last browser tab.
             // Info-started servers survive so the user can browse away and
             // back without churning ports.
