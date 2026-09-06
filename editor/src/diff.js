@@ -145,7 +145,7 @@ function attachContentListener(entry) {
   const diffEditor = entry.editor
   const modified = entry.modified
   if (!diffEditor || !modified) return
-  entry.contentListener = modified.onDidChangeModelContent(() => {
+  entry.contentListener = modified.onDidChangeContent(() => {
     if (entry.gen !== jsGeneration) return
     const dirty = modified.getAlternativeVersionId() !== entry.cleanVersionId
     if (dirty !== entry.dirty) {
@@ -237,8 +237,12 @@ function mountEditor(entry) {
   // route horizontal-dominant wheel events (trackpad swipe, shift+scroll) into
   // the diff editor's horizontal scroll. Vertical-dominant events are left to
   // the page so browsing between files keeps working.
-  // Bound once per host: hosts survive unmount/remount cycles, and re-adding
-  // the listener on every mount stacks duplicate handlers.
+  // Bound once per host (hosts survive unmount/remount cycles; re-adding
+  // on every mount stacks duplicate handlers), so the editor is resolved
+  // live at event time: closing over this mount's diffEditor would keep
+  // driving the disposed editor after the next remount. Capture phase so an
+  // inner Monaco scrollable can't stop propagation first; non-passive so
+  // preventDefault is honored.
   if (!host.dataset.wheelBound) {
     host.dataset.wheelBound = '1'
     host.addEventListener('wheel', (e) => {
@@ -250,10 +254,11 @@ function mountEditor(entry) {
         e.deltaMode
       )
       if (delta === 0) return
-      const modifiedEditor = diffEditor.getModifiedEditor()
-      modifiedEditor.setScrollLeft(modifiedEditor.getScrollLeft() + delta)
+      const live = entry.editor?.getModifiedEditor()
+      if (!live) return
+      live.setScrollLeft(live.getScrollLeft() + delta)
       e.preventDefault()
-    })
+    }, { capture: true, passive: false })
   }
 
   entry.editor = diffEditor
@@ -267,7 +272,7 @@ function mountEditor(entry) {
     entry.cleanVersionId = modified.getAlternativeVersionId()
     entry.dirty = false
     // Sticky focus tracking for Cmd+S (dropped with the editor on dispose).
-    diffEditor.getModifiedEditor().onDidFocus(() => { focusedPath = file.filePath })
+    diffEditor.getModifiedEditor().onDidFocusEditorText(() => { focusedPath = file.filePath })
     attachContentListener(entry)
   }
 
@@ -449,6 +454,10 @@ function makeHeader(file, entry) {
   viewedBox.addEventListener('change', () => {
     entry.section.classList.toggle('viewed', viewedBox.checked)
     postToSwift({ type: 'viewed', filePath: file.filePath, viewed: viewedBox.checked })
+    // GitHub-style: marking viewed collapses the file. Unchecking leaves the
+    // collapsed state alone (expand via chevron). setCollapsed notifies Swift,
+    // so persistence and the toolbar toggle mirror update automatically.
+    if (viewedBox.checked) setCollapsed(entry, true, true)
   })
   const viewedLabel = document.createElement('span')
   viewedLabel.className = 'viewed-label'
