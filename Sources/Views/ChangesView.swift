@@ -100,10 +100,13 @@ struct ChangesView: View {
     @State private var savingPaths: Set<String> = []
     /// File whose inline-edit save just failed (nil = no alert).
     @State private var saveErrorPath: String?
-    /// File awaiting delete confirmation (nil = no alert). The Trash vs
-    /// Discard wording resolves via `pendingDeleteUntracked` before showing.
+    /// File awaiting delete confirmation (nil = no alert). Trash vs Discard
+    /// wording resolves via `pendingDeleteTrash` before showing.
     @State private var pendingDelete: DiffFile?
-    @State private var pendingDeleteUntracked = false
+    @State private var pendingDeleteTrash = false
+    @State private var pendingDeleteStagedNew = false
+    /// File whose delete/discard just failed (nil = no alert).
+    @State private var deleteErrorPath: String?
 
     /// Live width of the files-changed sidebar. Init from UserDefaults so it
     /// survives tab switches and relaunches; a divider DragGesture commits the
@@ -254,7 +257,7 @@ struct ChangesView: View {
             saveViaKeyboard()
         }
         .alert(
-            pendingDeleteUntracked ? "Move to Trash" : "Discard Changes",
+            pendingDeleteTrash ? "Move to Trash" : "Discard Changes",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }
@@ -262,20 +265,24 @@ struct ChangesView: View {
         ) {
             Button("Cancel", role: .cancel) {}
             Button(
-                pendingDeleteUntracked ? "Move to Trash" : "Discard",
+                pendingDeleteTrash ? "Move to Trash" : "Discard",
                 role: .destructive
             ) {
                 if let file = pendingDelete {
-                    performDelete(file, untracked: pendingDeleteUntracked)
+                    performDelete(
+                        file,
+                        trash: pendingDeleteTrash,
+                        stagedNew: pendingDeleteStagedNew
+                    )
                 }
             }
         } message: {
             if let file = pendingDelete {
-                if pendingDeleteUntracked {
+                if pendingDeleteTrash {
                     Text(String(
                         format: NSLocalizedString(
-                            "\"%@\" is untracked and will be moved to the Trash.",
-                            comment: "Changes tab: untracked file delete confirmation"
+                            "\"%@\" will be moved to the Trash.",
+                            comment: "Changes tab: untracked/staged-new file delete confirmation"
                         ),
                         file.relativePath
                     ))
@@ -304,6 +311,25 @@ struct ChangesView: View {
                     format: NSLocalizedString(
                         "Could not save \"%@\".",
                         comment: "Changes tab: inline-edit save failure"
+                    ),
+                    path
+                ))
+            }
+        }
+        .alert(
+            "Could Not Delete",
+            isPresented: Binding(
+                get: { deleteErrorPath != nil },
+                set: { if !$0 { deleteErrorPath = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let path = deleteErrorPath {
+                Text(String(
+                    format: NSLocalizedString(
+                        "Could not delete \"%@\".",
+                        comment: "Changes tab: file delete/discard failure"
                     ),
                     path
                 ))
@@ -497,6 +523,16 @@ struct ChangesView: View {
         // switch, and revisit paths all gate on dirtyPaths), so this is a
         // safety net, not a data-loss path.
         clearAllDirty()
+        // Record on-disk conventions for the save path (Monaco round-trips
+        // everything as LF without BOM). Deferred/binary placeholders carry
+        // no texts and are stamped when their bodies load instead.
+        for entry in payload {
+            guard let path = entry["filePath"] as? String,
+                  let modified = entry["modifiedText"] as? String,
+                  !modified.isEmpty
+            else { continue }
+            stampEOL(path: path, modified: modified)
+        }
         bridge.lastFileCount = shells.count
         bridge.lastDiffFiles = contents.files
         bridge.lastFingerprint = fingerprint
@@ -637,6 +673,9 @@ struct ChangesView: View {
         bridge.onSaveFile = { path in
             saveFile(path)
         }
+        bridge.onRevertFile = { path in
+            reloadFileContent(path)
+        }
         bridge.onOpenInEditor = { [onOpenInEditor] path in
             onOpenInEditor?(path)
         }
@@ -662,7 +701,46 @@ struct ChangesView: View {
     private func clearAllDirty() {
         dirtyPaths.removeAll()
         bridge.dirtyPaths.removeAll()
+        bridge.eolMap.removeAll()
+        bridge.bomPaths.removeAll()
         onDirtyChanged?(false)
+    }
+
+    /// Line ending of on-disk text, detected at load. Monaco normalizes to LF
+    /// in the model, so saves convert back — otherwise persisting one edit in
+    /// a CRLF file rewrites every line ending. Pure (testable).
+    nonisolated static func detectEOL(_ text: String) -> String {
+        text.contains("\r\n") ? "crlf" : "lf"
+    }
+
+    /// Restore a saved text to its on-disk conventions: CRLF line endings and
+    /// a UTF-8 BOM when the loaded file had them. Normalizes to LF first so
+    /// an already-CRLF fragment can never double up. Pure (testable).
+    nonisolated static func encodeForSave(_ text: String, eol: String, bom: Bool) -> String {
+        var out = text
+        if eol == "crlf" {
+            out = out.replacingOccurrences(of: "\r\n", with: "\n")
+            out = out.replacingOccurrences(of: "\n", with: "\r\n")
+        }
+        if bom, !out.hasPrefix("\u{FEFF}") {
+            out = "\u{FEFF}" + out
+        }
+        return out
+    }
+
+    /// Record one file's on-disk conventions from freshly resolved text.
+    /// Same lifetime as the dirty mirrors: cleared on every fresh load.
+    private func stampEOL(path: String, modified: String) {
+        if modified.contains("\r\n") {
+            bridge.eolMap[path] = "crlf"
+        } else {
+            bridge.eolMap.removeValue(forKey: path)
+        }
+        if modified.hasPrefix("\u{FEFF}") {
+            bridge.bomPaths.insert(path)
+        } else {
+            bridge.bomPaths.remove(path)
+        }
     }
 
     /// Cmd+S: save the focused dirty file, else the selected dirty file, else
@@ -680,19 +758,23 @@ struct ChangesView: View {
     }
 
     /// Persist one file's inline diff edit to the worktree. Reads the live
-    /// modified-side text from JS, writes it atomically, then clears the dirty
-    /// mark. Refreshes only when nothing else is unsaved — a reload rebuilds
-    /// every editor and would drop other unsaved edits.
+    /// modified-side text from JS, restores its on-disk line endings/BOM,
+    /// writes it atomically, then clears the dirty mark. Refreshes fully only
+    /// when nothing else is unsaved; otherwise just the saved file's section
+    /// is reloaded in place — a full reload would drop other unsaved edits.
     private func saveFile(_ path: String) {
         guard !savingPaths.contains(path) else { return }
         savingPaths.insert(path)
         let workDir = workingDirectory
+        let eol = bridge.eolMap[path] ?? "lf"
+        let bom = bridge.bomPaths.contains(path)
         Task {
-            let text = await bridge.getContent(filePath: path)
-            guard let text else {
+            let rawText = await bridge.getContent(filePath: path)
+            guard let rawText else {
                 await MainActor.run { savingPaths.remove(path) }
                 return
             }
+            let text = Self.encodeForSave(rawText, eol: eol, bom: bom)
             let saved = await Task.detached(priority: .userInitiated) { () -> Bool in
                 let fullPath = (workDir as NSString).appendingPathComponent(path)
                 do {
@@ -712,46 +794,150 @@ struct ChangesView: View {
                 setDirty(path, dirty: false)
                 if dirtyPaths.isEmpty {
                     backgroundRefreshIfNeeded()
+                } else {
+                    reloadFileContent(path)
                 }
             }
         }
     }
 
-    /// Start the git-aware delete flow for a tree file: resolve Trash (untracked)
-    /// vs Discard (tracked) off the main thread, then show the confirmation.
+    /// Re-resolve one file's texts off the main thread and push them into the
+    /// live section in place (no full reload). Shared by Revert (abandon the
+    /// inline edit — the escape hatch for the refresh/mode-switch guards) and
+    /// post-save refresh (collapse the saved diff while other files stay
+    /// dirty). Re-stamps EOL/BOM detection and revalidates the Viewed mark
+    /// against the fresh content, mirroring a real reload.
+    private func reloadFileContent(_ path: String) {
+        guard !savingPaths.contains(path) else { return }
+        // Snapshot everything the background read needs: the view struct
+        // itself must not cross into the detached task.
+        let workDir = workingDirectory
+        let projDir = projectDirectory
+        let currentMode = mode
+        let meta = bridge.lastDiffFiles.first { $0.relativePath == path }
+        let status = meta?.status
+        let oldPath = meta?.oldPath
+        let wsID = workstreamID
+        let modeKey = mode.rawValue
+        let base = contentBaseRef
+        Task.detached(priority: .userInitiated) {
+            let fresh = Self.freshTexts(
+                workDir: workDir,
+                projDir: projDir,
+                mode: currentMode,
+                filePath: path,
+                status: status,
+                oldPath: oldPath
+            )
+            await MainActor.run {
+                self.bridge.setFileContent(
+                    filePath: path,
+                    originalText: fresh.original,
+                    modifiedText: fresh.modified
+                )
+                self.stampEOL(path: path, modified: fresh.modified)
+                self.setDirty(path, dirty: false)
+                let version = Self.contentVersion(original: fresh.original, modified: fresh.modified)
+                let survives = ChangesViewStateStore.validateViewed(
+                    workstreamID: wsID,
+                    mode: modeKey,
+                    base: base,
+                    path: path,
+                    version: version
+                )
+                if !survives {
+                    self.bridge.setViewed(filePath: path, viewed: false)
+                    self.viewedPaths.remove(path)
+                }
+            }
+        }
+    }
+
+    /// Resolve a fresh (original, modified, editable) triple for one file with
+    /// the same base-ref + lossy-decode + strict-UTF-8-gate rules as the
+    /// initial payload and click-to-load. Pure (apart from git/disk reads).
+    nonisolated static func freshTexts(
+        workDir: String,
+        projDir: String,
+        mode: ChangesMode,
+        filePath: String,
+        status: DiffFile.Status?,
+        oldPath: String?
+    ) -> (original: String, modified: String, editable: Bool) {
+        let base = Self.baseRef(workDir: workDir, projDir: projDir, mode: mode)
+        let (original, modified) = Self.fileTexts(
+            workDir: workDir,
+            baseRef: base,
+            filePath: filePath,
+            status: status,
+            oldPath: oldPath
+        )
+        let editable = mode == .uncommitted
+            && status != .deleted
+            && GitOperations.isValidUTF8(
+                atPath: (workDir as NSString).appendingPathComponent(filePath)
+            )
+        return (original, modified, editable)
+    }
+
+    /// Start the git-aware delete flow for a tree file: resolve Trash
+    /// (untracked, plus staged-new which has no HEAD version to restore) vs
+    /// Discard (tracked) off the main thread, then show the confirmation.
     private func requestDelete(_ file: DiffFile) {
         let workDir = workingDirectory
         let path = file.relativePath
         Task {
-            let untracked = await Task.detached(priority: .userInitiated) {
-                GitOperations.isUntrackedFile(at: workDir, filePath: path)
+            let (untracked, stagedNew) = await Task.detached(priority: .userInitiated) {
+                (
+                    GitOperations.isUntrackedFile(at: workDir, filePath: path),
+                    GitOperations.isStagedNew(at: workDir, filePath: path)
+                )
             }.value
             await MainActor.run {
                 pendingDelete = file
-                pendingDeleteUntracked = untracked
+                pendingDeleteTrash = untracked || stagedNew
+                pendingDeleteStagedNew = stagedNew
             }
         }
     }
 
-    /// Carry out a confirmed delete: trash untracked files, restore tracked
-    /// ones from HEAD. Clears any unsaved-edit mark for the path, then reloads.
-    private func performDelete(_ file: DiffFile, untracked: Bool) {
+    /// Carry out a confirmed delete: trash untracked files (unstaging
+    /// staged-new ones first so no index entry is stranded), restore tracked
+    /// ones from HEAD. A failed discard (renames, unexpected index states)
+    /// reports instead of silently leaving the file. Clears any unsaved-edit
+    /// mark for the path, then prunes the row locally — a full reload waits
+    /// for other unsaved edits to clear, so the trashed file would otherwise
+    /// linger in the tree.
+    private func performDelete(_ file: DiffFile, trash: Bool, stagedNew: Bool) {
         pendingDelete = nil
         let workDir = workingDirectory
         let path = file.relativePath
         Task {
-            await Task.detached(priority: .userInitiated) {
-                if untracked {
+            let succeeded = await Task.detached(priority: .userInitiated) { () -> Bool in
+                if trash {
+                    if stagedNew {
+                        GitOperations.unstageFile(at: workDir, filePath: path)
+                    }
                     let url = URL(
                         fileURLWithPath: (workDir as NSString).appendingPathComponent(path)
                     )
-                    try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                    do {
+                        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                        return true
+                    } catch {
+                        return false
+                    }
                 } else {
-                    GitOperations.discardFileChanges(at: workDir, filePath: path)
+                    return GitOperations.discardFileChanges(at: workDir, filePath: path)
                 }
             }.value
             await MainActor.run {
+                guard succeeded else {
+                    deleteErrorPath = path
+                    return
+                }
                 setDirty(path, dirty: false)
+                pruneDeletedFile(path)
                 GitOperations.invalidateRefCaches()
                 bridge.lastFingerprint = nil
                 if dirtyPaths.isEmpty {
@@ -759,6 +945,20 @@ struct ChangesView: View {
                 }
             }
         }
+    }
+
+    /// Drop one deleted file from the tree and the diff page without a full
+    /// reload (which may be blocked by other unsaved edits). The next full
+    /// load rebuilds everything from git, reconciling any drift.
+    private func pruneDeletedFile(_ path: String) {
+        diffFiles.removeAll { $0.relativePath == path }
+        fileCount = diffFiles.count
+        if selectedFilePath == path { selectedFilePath = nil }
+        viewedPaths.remove(path)
+        collapsedPaths.remove(path)
+        bridge.removeFile(filePath: path)
+        bridge.lastDiffFiles.removeAll { $0.relativePath == path }
+        bridge.lastFileCount = diffFiles.count
     }
 
     // MARK: - Full load (first visit, mode switch, or explicit refresh)

@@ -461,9 +461,13 @@
 "Move to Trash" = "In den Papierkorb legen";
 "Discard Changes" = "Änderungen verwerfen";
 "Discard" = "Verwerfen";
-"\"%@\" is untracked and will be moved to the Trash." = "\"%@\" ist nicht versioniert und wird in den Papierkorb gelegt.";
+"\"%@\" will be moved to the Trash." = "\"%@\" wird in den Papierkorb gelegt.";
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Alle ungespeicherten Änderungen an \"%@\" verwerfen? Dies kann nicht rückgängig gemacht werden.";
 "Unsaved changes" = "Ungespeicherte Änderungen";
 "Save your edits before switching modes" = "Speichern Sie Ihre Änderungen, bevor Sie den Modus wechseln";
 "Could Not Save" = "Speichern fehlgeschlagen";
 "Could not save \"%@\"." = "Konnte \"%@\" nicht speichern.";
+"Revert" = "Verwerfen";
+"Discard unsaved edits" = "Ungespeicherte Änderungen verwerfen";
+"Could Not Delete" = "Löschen fehlgeschlagen";
+"Could not delete \"%@\"." = "Konnte \"%@\" nicht löschen.";

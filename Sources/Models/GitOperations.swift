@@ -815,15 +815,29 @@ enum GitOperations {
         return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Whether a worktree-relative file is staged-new (added to the index but
+    /// with no HEAD version). Discard-via-checkout can't restore these, so the
+    /// Changes tab trashes them like untracked files (after unstaging).
+    static func isStagedNew(at path: String, filePath: String) -> Bool {
+        guard let out = run(args: ["status", "--porcelain", "--", filePath], in: path) else { return false }
+        return out.split(separator: "\n").contains { $0.first == "A" }
+    }
+
+    /// Unstage a path without touching the worktree copy.
+    static func unstageFile(at path: String, filePath: String) {
+        _ = run(args: ["reset", "HEAD", "--", filePath], in: path)
+    }
+
     /// Discard a single tracked file's uncommitted changes: unstage, then
     /// restore the worktree copy from HEAD. Mirrors `discardAllChanges` scoped
     /// to one path (same `reset` + `checkout` pair, so behavior matches).
-    /// No-op for untracked files (nothing to restore — trash those instead)
-    /// and for files staged-new (no HEAD version; `checkout` fails silently and
-    /// the file is left on disk as untracked, where Trash applies).
-    static func discardFileChanges(at path: String, filePath: String) {
-        _ = run(args: ["reset", "HEAD", "--", filePath], in: path)
-        _ = run(args: ["checkout", "--", filePath], in: path)
+    /// Returns false when the restore failed — staged-new files (no HEAD
+    /// version) and renames (no HEAD version at the new path) — leaving the
+    /// worktree untouched so the caller can offer Trash instead.
+    @discardableResult
+    static func discardFileChanges(at path: String, filePath: String) -> Bool {
+        guard run(args: ["reset", "HEAD", "--", filePath], in: path) != nil else { return false }
+        return run(args: ["checkout", "--", filePath], in: path) != nil
     }
 
     private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {

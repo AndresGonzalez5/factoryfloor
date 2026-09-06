@@ -39,6 +39,8 @@ final class MonacoDiffBridge: ObservableObject {
     var onContentChanged: ((_ filePath: String, _ dirty: Bool) -> Void)?
     /// Fired when a diff header's Save button is clicked in JS.
     var onSaveFile: ((_ filePath: String) -> Void)?
+    /// Fired when a diff header's Revert button is clicked in JS.
+    var onRevertFile: ((_ filePath: String) -> Void)?
     /// Fired when a diff header's Open-in-Editor button is clicked in JS.
     var onOpenInEditor: ((_ filePath: String) -> Void)?
 
@@ -89,6 +91,15 @@ final class MonacoDiffBridge: ObservableObject {
     /// the bridge (not @State) so it survives the SwiftUI view being rebuilt on
     /// tab switches; ChangesView mirrors it into `dirtyPaths` for rendering.
     var dirtyPaths: Set<String> = []
+
+    /// Original line ending per path ("crlf" or "lf"), detected at load from
+    /// the on-disk text. Monaco normalizes to LF in the model, so saves must
+    /// convert back or a CRLF file gets whole-file churn. Same lifetime as
+    /// `dirtyPaths` (cleared on every fresh load).
+    var eolMap: [String: String] = [:]
+    /// Paths whose on-disk text starts with a UTF-8 BOM. Monaco strips the
+    /// BOM on model creation, so saves must re-prepend it.
+    var bomPaths: Set<String> = []
 
     /// Whether setShells() has run at least once (cached content lives in the WebView).
     private(set) var hasContent = false
@@ -263,6 +274,33 @@ final class MonacoDiffBridge: ObservableObject {
         }
     }
 
+    /// Replace a file's texts in place (revert-to-disk, post-save refresh).
+    /// JS updates the stored texts and any mounted models, resets dirty
+    /// tracking without emitting contentChanged; the caller clears its own
+    /// dirty mirrors afterwards.
+    func setFileContent(filePath: String, originalText: String, modifiedText: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            let payload: [String: Any] = [
+                "filePath": filePath,
+                "originalText": originalText,
+                "modifiedText": modifiedText,
+            ]
+            guard let json = Self.jsonString(from: payload) else { return }
+            webView.evaluateJavaScript("window.diffAPI.setFileContent(\(json))")
+        }
+    }
+
+    /// Drop one file's section entirely (post-delete prune while other dirty
+    /// files block a full reload). No-op for unknown paths in JS.
+    func removeFile(filePath: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            guard let json = Self.jsonString(fromString: filePath) else { return }
+            webView.evaluateJavaScript("window.diffAPI.removeFile(\(json))")
+        }
+    }
+
     /// Ordered save targets for Cmd+S, resolved in JS against live editor
     /// state: focused dirty file, else the selected tree file when dirty, else
     /// all dirty files. Empty when nothing is unsaved. Nil webview/ready also
@@ -317,6 +355,11 @@ final class MonacoDiffBridge: ObservableObject {
             "markViewed": NSLocalizedString("Mark as viewed", comment: "Changes diff header: mark file as viewed"),
             "viewed": NSLocalizedString("Viewed", comment: "Changes diff header: viewed checkbox label"),
             "save": NSLocalizedString("Save", comment: "Changes diff header: save edited file button"),
+            "revert": NSLocalizedString("Revert", comment: "Changes diff header: discard inline edits button"),
+            "discardEdit": NSLocalizedString(
+                "Discard unsaved edits",
+                comment: "Changes diff header: discard inline edits button tooltip"
+            ),
             "openInEditor": NSLocalizedString("Open in Editor", comment: "Changes diff header: open file in editor button"),
             "unsavedChanges": NSLocalizedString("Unsaved changes", comment: "Changes diff header: unsaved changes indicator"),
         ]
@@ -343,6 +386,17 @@ final class MonacoDiffBridge: ObservableObject {
                 // was reading, this content is from the wrong base — drop it.
                 // (JS also drops it via its own generation check.)
                 guard self.reviewContext == context else { return }
+                // Record on-disk conventions for the save path (see eolMap).
+                if modified.contains("\r\n") {
+                    self.eolMap[filePath] = "crlf"
+                } else {
+                    self.eolMap.removeValue(forKey: filePath)
+                }
+                if modified.hasPrefix("\u{FEFF}") {
+                    self.bomPaths.insert(filePath)
+                } else {
+                    self.bomPaths.remove(filePath)
+                }
                 self.loadFileContent(
                     filePath: filePath,
                     originalText: original,
@@ -470,6 +524,10 @@ final class MonacoDiffBridge: ObservableObject {
                 case "saveFile":
                     if let filePath = body["filePath"] as? String {
                         self.bridge.onSaveFile?(filePath)
+                    }
+                case "revertFile":
+                    if let filePath = body["filePath"] as? String {
+                        self.bridge.onRevertFile?(filePath)
                     }
                 case "openInEditor":
                     if let filePath = body["filePath"] as? String {

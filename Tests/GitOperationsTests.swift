@@ -889,7 +889,7 @@ final class GitOperationsTests: XCTestCase {
     func testDiscardFileChangesRestoresTrackedFile() throws {
         let repo = try makeRepoWithFiles()
         try "modified\n".write(to: repo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
-        GitOperations.discardFileChanges(at: repo.path, filePath: "tracked.txt")
+        XCTAssertTrue(GitOperations.discardFileChanges(at: repo.path, filePath: "tracked.txt"))
         let content = try String(contentsOf: repo.appendingPathComponent("tracked.txt"), encoding: .utf8)
         XCTAssertEqual(content, "tracked\n")
         XCTAssertTrue(gitOutput(["status", "--porcelain"], in: repo).contains("??"))
@@ -897,9 +897,33 @@ final class GitOperationsTests: XCTestCase {
 
     func testDiscardFileChangesLeavesUntrackedFileAlone() throws {
         let repo = try makeRepoWithFiles()
-        GitOperations.discardFileChanges(at: repo.path, filePath: "untracked.txt")
+        XCTAssertFalse(GitOperations.discardFileChanges(at: repo.path, filePath: "untracked.txt"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: repo.appendingPathComponent("untracked.txt").path))
         XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "untracked.txt"))
+    }
+
+    func testStagedNewIsNotUntrackedAndDiscardFails() throws {
+        let repo = try makeRepoWithFiles()
+        try "staged\n".write(to: repo.appendingPathComponent("staged.txt"), atomically: true, encoding: .utf8)
+        git(["add", "staged.txt"], in: repo)
+        // Staged-new files are known to the index, so they route to Discard —
+        // which must report failure (no HEAD version) so the caller can trash.
+        XCTAssertFalse(GitOperations.isUntrackedFile(at: repo.path, filePath: "staged.txt"))
+        XCTAssertTrue(GitOperations.isStagedNew(at: repo.path, filePath: "staged.txt"))
+        XCTAssertFalse(GitOperations.isStagedNew(at: repo.path, filePath: "tracked.txt"))
+        XCTAssertFalse(GitOperations.isStagedNew(at: repo.path, filePath: "untracked.txt"))
+        XCTAssertFalse(GitOperations.discardFileChanges(at: repo.path, filePath: "staged.txt"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repo.appendingPathComponent("staged.txt").path))
+    }
+
+    func testUnstageFileLeavesWorktreeCopy() throws {
+        let repo = try makeRepoWithFiles()
+        try "staged\n".write(to: repo.appendingPathComponent("staged.txt"), atomically: true, encoding: .utf8)
+        git(["add", "staged.txt"], in: repo)
+        GitOperations.unstageFile(at: repo.path, filePath: "staged.txt")
+        XCTAssertFalse(GitOperations.isStagedNew(at: repo.path, filePath: "staged.txt"))
+        XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "staged.txt"))
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("staged.txt"), encoding: .utf8), "staged\n")
     }
 
     func testIsValidUTF8RejectsNonUTF8Bytes() throws {

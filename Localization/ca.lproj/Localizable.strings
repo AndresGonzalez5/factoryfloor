@@ -462,9 +462,13 @@
 "Move to Trash" = "Mou a la paperera";
 "Discard Changes" = "Descarta els canvis";
 "Discard" = "Descarta";
-"\"%@\" is untracked and will be moved to the Trash." = "\"%@\" no té seguiment i es mourà a la paperera.";
+"\"%@\" will be moved to the Trash." = "\"%@\" es mourà a la paperera.";
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Vols descartar tots els canvis sense desar de \"%@\"? Aquesta acció no es pot desfer.";
 "Unsaved changes" = "Canvis sense desar";
 "Save your edits before switching modes" = "Deseu els canvis abans de canviar de mode";
 "Could Not Save" = "No s'ha pogut desar";
 "Could not save \"%@\"." = "No s'ha pogut desar \"%@\".";
+"Revert" = "Reverteix";
+"Discard unsaved edits" = "Descarta els canvis sense desar";
+"Could Not Delete" = "No s'ha pogut eliminar";
+"Could not delete \"%@\"." = "No s'ha pogut eliminar \"%@\".";

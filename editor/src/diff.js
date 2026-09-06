@@ -44,6 +44,8 @@ const STR = {
   markViewed: 'Mark as viewed',
   viewed: 'Viewed',
   save: 'Save',
+  revert: 'Revert',
+  discardEdit: 'Discard unsaved edits',
   openInEditor: 'Open in Editor',
   unsavedChanges: 'Unsaved changes'
 }
@@ -130,6 +132,29 @@ function resizeDiffEditor(diffEditor, host, gen) {
   if (host.style.height === `${newHeight}px`) return
   host.style.height = `${newHeight}px`
   diffEditor.layout()
+}
+
+// Dirty tracking for an editable mounted editor: version-id compare (same
+// technique as main.js), reported to Swift so it can show progress + guard
+// refreshes. Typing also resizes the host immediately so the page grows with
+// the edit instead of waiting for the diff recompute.
+function attachContentListener(entry) {
+  const file = entry.file
+  const host = entry.host
+  const gen = entry.gen
+  const diffEditor = entry.editor
+  const modified = entry.modified
+  if (!diffEditor || !modified) return
+  entry.contentListener = modified.onDidChangeModelContent(() => {
+    if (entry.gen !== jsGeneration) return
+    const dirty = modified.getAlternativeVersionId() !== entry.cleanVersionId
+    if (dirty !== entry.dirty) {
+      entry.dirty = dirty
+      if (entry.syncEditUI) entry.syncEditUI()
+      postToSwift({ type: 'contentChanged', filePath: file.filePath, dirty })
+    }
+    resizeDiffEditor(diffEditor, host, gen)
+  })
 }
 
 function disposeEditor(entry) {
@@ -237,25 +262,13 @@ function mountEditor(entry) {
   entry.mounted = true
   if (farObserver && host.isConnected) farObserver.observe(host)
 
-  // Dirty tracking for editable files: version-id compare (same technique as
-  // main.js), reported to Swift so it can show progress + guard refreshes.
-  // Typing also resizes the host immediately so the page grows with the edit
-  // instead of waiting for the diff recompute.
+  // Dirty tracking for editable files (see attachContentListener).
   if (editable) {
     entry.cleanVersionId = modified.getAlternativeVersionId()
     entry.dirty = false
     // Sticky focus tracking for Cmd+S (dropped with the editor on dispose).
     diffEditor.getModifiedEditor().onDidFocus(() => { focusedPath = file.filePath })
-    entry.contentListener = modified.onDidChangeModelContent(() => {
-      if (entry.gen !== jsGeneration) return
-      const dirty = modified.getAlternativeVersionId() !== entry.cleanVersionId
-      if (dirty !== entry.dirty) {
-        entry.dirty = dirty
-        if (entry.syncEditUI) entry.syncEditUI()
-        postToSwift({ type: 'contentChanged', filePath: file.filePath, dirty })
-      }
-      resizeDiffEditor(diffEditor, host, gen)
-    })
+    attachContentListener(entry)
   }
 
   // onDidUpdateDiff can fire multiple times per editor (layout, folding);
@@ -487,18 +500,35 @@ function addEditControls(header, file, entry, before) {
     postToSwift({ type: 'openInEditor', filePath: file.filePath })
   })
 
+  // Revert (VS Code Source Control style): drop the inline edit and restore
+  // the last loaded text. The escape hatch for the refresh/mode-switch
+  // guards, which block while any edit is unsaved.
+  const revert = document.createElement('button')
+  revert.className = 'save-btn'
+  revert.type = 'button'
+  revert.textContent = STR.revert
+  revert.title = STR.discardEdit
+  revert.setAttribute('aria-label', STR.discardEdit)
+  revert.disabled = true
+  revert.addEventListener('click', () => {
+    postToSwift({ type: 'revertFile', filePath: file.filePath })
+  })
+
   if (before) {
     header.insertBefore(dirtyDot, before)
     header.insertBefore(save, before)
+    header.insertBefore(revert, before)
     header.insertBefore(open, before)
   } else {
     header.appendChild(dirtyDot)
     header.appendChild(save)
+    header.appendChild(revert)
     header.appendChild(open)
   }
 
   entry.syncEditUI = () => {
     save.disabled = !entry.dirty
+    revert.disabled = !entry.dirty
     dirtyDot.hidden = !entry.dirty
   }
 }
@@ -785,13 +815,60 @@ window.diffAPI = {
     return dirty
   },
 
-  // Mark a model as clean (after save).
+  // Mark a model as clean (after save). Always clears the JS dirty flag —
+  // even when unmounted — so the JS mirror can never disagree with Swift's.
   markClean(path) {
     const entry = sections.get(path)
-    if (!entry || !entry.mounted || !entry.modified) return
-    entry.cleanVersionId = entry.modified.getAlternativeVersionId()
+    if (!entry) return
     entry.dirty = false
     if (entry.syncEditUI) entry.syncEditUI()
+    if (!entry.mounted || !entry.modified) return
+    entry.cleanVersionId = entry.modified.getAlternativeVersionId()
+  },
+
+  // Replace a file's texts in place (revert-to-disk, post-save refresh):
+  // updates the stored texts and, when mounted, both live models. The dirty
+  // listener is detached across the programmatic set so no spurious
+  // contentChanged messages escape; Swift clears its own mirrors after this
+  // returns. No-op for unknown paths or superseded generations.
+  setFileContent(payload) {
+    const entry = sections.get(payload?.filePath)
+    if (!entry || entry.gen !== jsGeneration) return
+    const originalText = payload.originalText ?? ''
+    const modifiedText = payload.modifiedText ?? ''
+    entry.file = { ...entry.file, originalText, modifiedText }
+    if (entry.mounted && entry.editor && entry.original && entry.modified) {
+      if (entry.contentListener) entry.contentListener.dispose()
+      entry.contentListener = null
+      entry.original.setValue(originalText)
+      entry.modified.setValue(modifiedText)
+      entry.cleanVersionId = entry.modified.getAlternativeVersionId()
+      entry.dirty = false
+      if (entry.syncEditUI) entry.syncEditUI()
+      if (entry.file.editable && entry.file.status !== 'D') attachContentListener(entry)
+      resizeDiffEditor(entry.editor, entry.host, entry.gen)
+    } else {
+      entry.dirty = false
+      if (entry.syncEditUI) entry.syncEditUI()
+    }
+  },
+
+  // Drop one file's section entirely (post-delete prune while other dirty
+  // files block a full reload). Disposes its editor; scroll neighbors keep
+  // their measured heights so the removal is position-neutral for them.
+  removeFile(path) {
+    const entry = sections.get(path)
+    if (!entry || entry.gen !== jsGeneration) return
+    if (mountObserver) {
+      if (entry.host) mountObserver.unobserve(entry.host)
+      if (entry.deferredNote) mountObserver.unobserve(entry.deferredNote)
+    }
+    if (farObserver && entry.host) farObserver.unobserve(entry.host)
+    disposeSection(entry)
+    if (entry.section) entry.section.remove()
+    sections.delete(path)
+    pendingVisible.delete(path)
+    if (focusedPath === path) focusedPath = null
   },
 
   // Set one file's Viewed checkbox from Swift (e.g. clearing a stale mark).

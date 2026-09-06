@@ -454,6 +454,14 @@ struct TerminalContainerView: View {
         changesDirty = isChangesTabActive && changesDirtyState
     }
 
+    /// Clear the Save-menu flags (workspace going inactive or disappearing).
+    private func clearMenuFlags() {
+        editorTabActive = false
+        editorFileDirty = false
+        changesTabActive = false
+        changesDirty = false
+    }
+
     /// Surface IDs that should be rendering for the active tab.
     private var visibleSurfaceIDs: Set<UUID>? {
         switch activeTab {
@@ -1030,13 +1038,10 @@ struct TerminalContainerView: View {
                 startFileTreeWatcherIfNeeded()
             }
         }
-        .onDisappear {
-            if isActive {
-                editorTabActive = false
-                editorFileDirty = false
-                changesTabActive = false
-                changesDirty = false
-            }
+            .onDisappear {
+                if isActive {
+                    clearMenuFlags()
+                }
             guard workspaceStarted else { return }
             surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
         }
@@ -1182,10 +1187,14 @@ struct TerminalContainerView: View {
                 }
             }
             .onChange(of: isActive) { _, active in
-                editorTabActive = active && isEditorTabActive
-                editorFileDirty = active && isActiveEditorDirty
-                changesTabActive = active && isChangesTabActive
-                changesDirty = active && isChangesTabActive && changesDirtyState
+                // Single funnel for the Save-menu flags: an inactive workspace
+                // clears, the front one recomputes. Writing the flags anywhere
+                // else risks ordering races when workspaces switch.
+                if active {
+                    syncMenuFlags()
+                } else {
+                    clearMenuFlags()
+                }
                 if active {
                     surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
                 } else {

@@ -160,6 +160,39 @@ final class ChangesContentLimitTests: XCTestCase {
         XCTAssertEqual(bodies.first?["modifiedText"] as? String, "new")
     }
 
+    func testDetectEOLFindsCRLF() {
+        XCTAssertEqual(ChangesView.detectEOL("a\r\nb\r\n"), "crlf")
+        XCTAssertEqual(ChangesView.detectEOL("a\nb\n"), "lf")
+        XCTAssertEqual(ChangesView.detectEOL("no newlines"), "lf")
+        XCTAssertEqual(ChangesView.detectEOL(""), "lf")
+    }
+
+    func testEncodeForSaveRestoresCRLFAndBOM() {
+        // Monaco hands back LF without BOM; the save path restores both.
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\nb\n", eol: "crlf", bom: false),
+            "a\r\nb\r\n"
+        )
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\n", eol: "lf", bom: true),
+            "\u{FEFF}a\n"
+        )
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\n", eol: "lf", bom: false),
+            "a\n"
+        )
+        // Already-CRLF fragments must not double up.
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\r\nb\n", eol: "crlf", bom: false),
+            "a\r\nb\r\n"
+        )
+        // A surviving BOM is never duplicated.
+        XCTAssertEqual(
+            ChangesView.encodeForSave("\u{FEFF}a\n", eol: "lf", bom: true),
+            "\u{FEFF}a\n"
+        )
+    }
+
     func testWeakVersionDetectsSameSizeContentSwapViaMtime() {
         // Same line counts and byte size, different mtime: must differ so a
         // same-size edit still clears the Viewed mark.

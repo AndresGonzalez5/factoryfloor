@@ -462,9 +462,13 @@
 "Move to Trash" = "Mover a la papelera";
 "Discard Changes" = "Descartar cambios";
 "Discard" = "Descartar";
-"\"%@\" is untracked and will be moved to the Trash." = "\"%@\" no tiene seguimiento y se moverá a la papelera.";
+"\"%@\" will be moved to the Trash." = "\"%@\" se moverá a la papelera.";
 "Discard all uncommitted changes to \"%@\"? This cannot be undone." = "¿Descartar todos los cambios sin guardar de \"%@\"? Esta acción no se puede deshacer.";
 "Unsaved changes" = "Cambios sin guardar";
 "Save your edits before switching modes" = "Guarde los cambios antes de cambiar de modo";
 "Could Not Save" = "No se pudo guardar";
 "Could not save \"%@\"." = "No se pudo guardar \"%@\".";
+"Revert" = "Revertir";
+"Discard unsaved edits" = "Descartar los cambios sin guardar";
+"Could Not Delete" = "No se pudo eliminar";
+"Could not delete \"%@\"." = "No se pudo eliminar \"%@\".";
