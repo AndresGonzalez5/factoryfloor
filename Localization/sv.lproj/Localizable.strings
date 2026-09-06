@@ -455,3 +455,20 @@
 "Open Pull Request" = "Öppna pull request";
 "Open Link" = "Öppna länk";
 "Working…" = "Arbetar…";
+
+/* Changes tab: inline edit + delete */
+"Open in Editor" = "Öppna i redigeraren";
+"Delete…" = "Ta bort…";
+"Move to Trash" = "Flytta till papperskorgen";
+"Discard Changes" = "Kasta ändringar";
+"Discard" = "Kasta";
+"\"%@\" will be moved to the Trash." = "\"%@\" flyttas till papperskorgen.";
+"Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Kasta alla osparade ändringar i \"%@\"? Detta kan inte ångras.";
+"Unsaved changes" = "Osparade ändringar";
+"Save your edits before switching modes" = "Spara ändringarna innan du byter läge";
+"Could Not Save" = "Kunde inte spara";
+"Could not save \"%@\"." = "Kunde inte spara \"%@\".";
+"Revert" = "Återställ";
+"Discard unsaved edits" = "Kasta osparade ändringar";
+"Could Not Delete" = "Kunde inte ta bort";
+"Could not delete \"%@\"." = "Kunde inte ta bort \"%@\".";

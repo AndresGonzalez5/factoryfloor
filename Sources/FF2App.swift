@@ -161,6 +161,8 @@ struct FF2App: App {
     @StateObject private var updater = Updater()
     @AppStorage("factoryfloor.editorTabActive") private var isEditorActive = false
     @AppStorage("factoryfloor.editorFileDirty") private var isEditorDirty = false
+    @AppStorage("factoryfloor.changesTabActive") private var isChangesActive = false
+    @AppStorage("factoryfloor.changesDirty") private var isChangesDirty = false
     @State private var pendingURLDirectory: String?
 
     init() {
@@ -316,6 +318,15 @@ struct FF2App: App {
                         NotificationCenter.default.post(name: .saveEditorAs, object: nil)
                     }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                } else if isChangesActive {
+                    // The Changes tab reuses the Save shortcut for inline diff
+                    // edits (no EditorView is live to receive it instead).
+                    // Disabled until a diff edit is unsaved.
+                    Button("Save") {
+                        NotificationCenter.default.post(name: .saveEditor, object: nil)
+                    }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(!isChangesDirty)
                 }
             }
             // Cmd+,: toggle settings

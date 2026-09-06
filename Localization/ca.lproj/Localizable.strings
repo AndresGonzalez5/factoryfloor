@@ -455,3 +455,20 @@
 "Open Pull Request" = "Obre el pull request";
 "Open Link" = "Obre l'enllaç";
 "Working…" = "Treballant…";
+
+/* Changes tab: inline edit + delete */
+"Open in Editor" = "Obre a l'editor";
+"Delete…" = "Suprimeix…";
+"Move to Trash" = "Mou a la paperera";
+"Discard Changes" = "Descarta els canvis";
+"Discard" = "Descarta";
+"\"%@\" will be moved to the Trash." = "\"%@\" es mourà a la paperera.";
+"Discard all uncommitted changes to \"%@\"? This cannot be undone." = "Vols descartar tots els canvis sense desar de \"%@\"? Aquesta acció no es pot desfer.";
+"Unsaved changes" = "Canvis sense desar";
+"Save your edits before switching modes" = "Deseu els canvis abans de canviar de mode";
+"Could Not Save" = "No s'ha pogut desar";
+"Could not save \"%@\"." = "No s'ha pogut desar \"%@\".";
+"Revert" = "Reverteix";
+"Discard unsaved edits" = "Descarta els canvis sense desar";
+"Could Not Delete" = "No s'ha pogut eliminar";
+"Could not delete \"%@\"." = "No s'ha pogut eliminar \"%@\".";

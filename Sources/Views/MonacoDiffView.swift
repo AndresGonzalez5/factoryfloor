@@ -18,19 +18,31 @@ final class MonacoDiffBridge: ObservableObject {
     private var coordinator: Coordinator?
     private var appearanceObserver: NSKeyValueObservation?
 
-    /// Fired when diff.js reports all editors have finished rendering ("contentReady").
-    /// ChangesView uses this to drop its loading / refreshing indicator.
+    /// Fired when diff.js reports shells have finished rendering
+    /// ("contentReady"). ChangesView uses this to drop its loading /
+    /// refreshing indicator; streamed bodies fill in skeleton placeholders
+    /// afterwards without holding the indicator.
     var onContentReady: (() -> Void)?
 
-    /// Resolves the (original, modified, languageId) content for a single deferred
-    /// file when its placeholder is clicked. Invoked off the main thread.
-    /// ChangesView installs this so the bridge has the current workDir + base ref.
-    var onLoadFile: ((_ filePath: String) -> (original: String, modified: String, languageId: String))?
+    /// Resolves the (original, modified, languageId, editable) content for a
+    /// single deferred file when its placeholder is clicked. Invoked off the
+    /// main thread. ChangesView installs this so the bridge has the current
+    /// workDir + base ref.
+    var onLoadFile: ((_ filePath: String) -> (original: String, modified: String, languageId: String, editable: Bool))?
 
     /// Fired when a diff header's Viewed checkbox toggles in JS.
     var onViewedChanged: ((_ filePath: String, _ viewed: Bool) -> Void)?
     /// Fired when a diff section collapses/expands in JS.
     var onCollapsedChanged: ((_ filePath: String, _ collapsed: Bool) -> Void)?
+    /// Fired when an editable file's dirty state changes in JS.
+    /// Parameters: (filePath, isDirty).
+    var onContentChanged: ((_ filePath: String, _ dirty: Bool) -> Void)?
+    /// Fired when a diff header's Save button is clicked in JS.
+    var onSaveFile: ((_ filePath: String) -> Void)?
+    /// Fired when a diff header's Revert button is clicked in JS.
+    var onRevertFile: ((_ filePath: String) -> Void)?
+    /// Fired when a diff header's Open-in-Editor button is clicked in JS.
+    var onOpenInEditor: ((_ filePath: String) -> Void)?
 
     /// Review identity for the currently rendered content. Set per load by
     /// ChangesView so deferred content arriving later can validate viewed
@@ -43,14 +55,14 @@ final class MonacoDiffBridge: ObservableObject {
 
     var reviewContext: ReviewContext?
 
-    /// Git fingerprint from the last successful setFiles() call. ChangesView uses
+    /// Git fingerprint from the last successful setShells() call. ChangesView uses
     /// it to skip reloading when nothing in git has changed between tab visits.
     var lastFingerprint: String?
 
     /// The mode ("branch"/"uncommitted") that was active for the last load.
     var lastMode: String?
 
-    /// Number of files from the last setFiles() call. Stored here (not @State) so
+    /// Number of files from the last setShells() call. Stored here (not @State) so
     /// it survives the SwiftUI view being re-created on a tab switch.
     var lastFileCount = 0
 
@@ -58,17 +70,38 @@ final class MonacoDiffBridge: ObservableObject {
     /// Cached alongside the other `last*` fields for instant tab revisits.
     var lastBaseLabel = ""
 
-    /// Monotonic content generation. Bumped on every setFiles/setShells so
-    /// late `contentReady` callbacks from a superseded render can be ignored
-    /// by comparing against the generation captured at load time.
+    /// Monotonic content generation. Bumped on every setShells so late
+    /// `contentReady` callbacks from a superseded render can be ignored by
+    /// comparing against the generation captured at load time.
     private(set) var contentGeneration = 0
+
+    /// Monotonic body-stream generation. Bumped on every setShells; chunked
+    /// body deliveries capture it and stop when it moves (mode switch,
+    /// refresh, newer load). Lives on the bridge — not @State — so streams
+    /// survive Changes tab switches, which rebuild the SwiftUI view (and its
+    /// @State) while this bridge and its WKWebView persist.
+    var streamGeneration = 0
 
     /// Structured changed-file list from the last load. Cached here (not @State)
     /// so the Changes sidebar tree survives the SwiftUI view being re-created on
     /// a tab switch, matching `lastFileCount`/`hasContent`.
     var lastDiffFiles: [DiffFile] = []
 
-    /// Whether setFiles() has run at least once (cached content lives in the WebView).
+    /// Worktree-relative paths with unsaved inline edits in the diff. Lives on
+    /// the bridge (not @State) so it survives the SwiftUI view being rebuilt on
+    /// tab switches; ChangesView mirrors it into `dirtyPaths` for rendering.
+    var dirtyPaths: Set<String> = []
+
+    /// Original line ending per path ("crlf" or "lf"), detected at load from
+    /// the on-disk text. Monaco normalizes to LF in the model, so saves must
+    /// convert back or a CRLF file gets whole-file churn. Same lifetime as
+    /// `dirtyPaths` (cleared on every fresh load).
+    var eolMap: [String: String] = [:]
+    /// Paths whose on-disk text starts with a UTF-8 BOM. Monaco strips the
+    /// BOM on model creation, so saves must re-prepend it.
+    var bomPaths: Set<String> = []
+
+    /// Whether setShells() has run at least once (cached content lives in the WebView).
     private(set) var hasContent = false
 
     // MARK: - WebView lifecycle
@@ -110,26 +143,40 @@ final class MonacoDiffBridge: ObservableObject {
 
     // MARK: - Diff API
 
-    /// Render the given files as a stack of Monaco diff editors.
-    /// Each dict carries: filePath, status, languageId, originalText, modifiedText,
-    /// and optionally binary/deferred/changedLines for the placeholder cases.
-    /// Bumps `contentGeneration`; `contentReady` handlers should compare the
-    /// generation they captured against the current value to drop late
-    /// callbacks from superseded renders.
-    func setFiles(_ files: [[String: Any]]) {
+    /// Render shells for the given files: metadata-only entries (filePath,
+    /// status, languageId, changedLines, editable, binary/deferred/pending
+    /// flags, viewed/collapsed). Normal files arrive with `pending: true` and
+    /// empty texts; their bodies stream in afterwards via `loadFileContent`,
+    /// which upgrades each skeleton in place. Shells render as cheap DOM
+    /// (headers + placeholders), so first paint never waits on Monaco diff
+    /// computation or a giant single JSON transfer.
+    /// Bumps `contentGeneration` and `streamGeneration`; body chunks capture
+    /// the latter and stop when it moves. Returns false when the shells can't
+    /// even be serialized — the caller must clear its loading state instead
+    /// of waiting for a `contentReady` that will never arrive.
+    @discardableResult
+    func setShells(_ shells: [[String: Any]]) -> Bool {
         hasContent = true
         contentGeneration += 1
+        streamGeneration += 1
         let generation = contentGeneration
+        guard let json = Self.jsonString(from: shells) else {
+            print("[MonacoDiff] setShells serialization failed (\(shells.count) entries)")
+            return false
+        }
         enqueue {
             guard let webView = self.webView else { return }
-            guard let json = Self.jsonString(from: files) else { return }
             webView.evaluateJavaScript("window.diffAPI.setFiles(\(json), \(generation))")
         }
+        return true
     }
 
-    /// Inject the loaded content for a previously-deferred file, replacing its
-    /// placeholder with a real diff editor in place (no full re-render).
-    func loadFileContent(filePath: String, originalText: String, modifiedText: String, languageId: String) {
+    /// Inject the body for a shell whose texts were deferred — either a
+    /// large-file placeholder after click/scroll-to-load, or a `pending`
+    /// shell from the chunked body stream — replacing its placeholder with a
+    /// real diff editor in place (no full re-render). Duplicate deliveries
+    /// are ignored by JS, so a body racing click-to-load is harmless.
+    func loadFileContent(filePath: String, originalText: String, modifiedText: String, languageId: String, editable: Bool) {
         enqueue {
             guard let webView = self.webView else { return }
             let payload: [String: Any] = [
@@ -137,6 +184,7 @@ final class MonacoDiffBridge: ObservableObject {
                 "originalText": originalText,
                 "modifiedText": modifiedText,
                 "languageId": languageId,
+                "editable": editable,
             ]
             guard let json = Self.jsonString(from: payload) else { return }
             webView.evaluateJavaScript("window.diffAPI.loadFileContent(\(json))")
@@ -199,6 +247,82 @@ final class MonacoDiffBridge: ObservableObject {
         }
     }
 
+    /// Current modified-side text for a file (live editor content when the
+    /// section is mounted, otherwise the last loaded text). Used to persist
+    /// inline edits made in the diff. Nil when the webview isn't ready or the
+    /// file isn't rendered.
+    func getContent(filePath: String) async -> String? {
+        guard let webView, isReady else { return nil }
+        guard let json = Self.jsonString(fromString: filePath) else { return nil }
+        do {
+            return try await webView.evaluateJavaScript(
+                "window.diffAPI.getContent(\(json))"
+            ) as? String
+        } catch {
+            print("[MonacoDiff] getContent failed for \(filePath): \(error)")
+            return nil
+        }
+    }
+
+    /// Mark a file's model clean after its content was persisted (clears the
+    /// dirty dot and disables the Save button; JS keeps tracking from here).
+    func markClean(filePath: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            guard let json = Self.jsonString(fromString: filePath) else { return }
+            webView.evaluateJavaScript("window.diffAPI.markClean(\(json))")
+        }
+    }
+
+    /// Replace a file's texts in place (revert-to-disk, post-save refresh).
+    /// JS updates the stored texts and any mounted models, resets dirty
+    /// tracking without emitting contentChanged; the caller clears its own
+    /// dirty mirrors afterwards.
+    func setFileContent(filePath: String, originalText: String, modifiedText: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            let payload: [String: Any] = [
+                "filePath": filePath,
+                "originalText": originalText,
+                "modifiedText": modifiedText,
+            ]
+            guard let json = Self.jsonString(from: payload) else { return }
+            webView.evaluateJavaScript("window.diffAPI.setFileContent(\(json))")
+        }
+    }
+
+    /// Drop one file's section entirely (post-delete prune while other dirty
+    /// files block a full reload). No-op for unknown paths in JS.
+    func removeFile(filePath: String) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            guard let json = Self.jsonString(fromString: filePath) else { return }
+            webView.evaluateJavaScript("window.diffAPI.removeFile(\(json))")
+        }
+    }
+
+    /// Ordered save targets for Cmd+S, resolved in JS against live editor
+    /// state: focused dirty file, else the selected tree file when dirty, else
+    /// all dirty files. Empty when nothing is unsaved. Nil webview/ready also
+    /// yields empty (save is a no-op while the diff is still loading).
+    func saveTargets(selected: String?) async -> [String] {
+        guard let webView, isReady else { return [] }
+        do {
+            let arg: String
+            if let selected, let json = Self.jsonString(fromString: selected) {
+                arg = json
+            } else {
+                arg = "null"
+            }
+            return try await webView.evaluateJavaScript(
+                "window.diffAPI.saveTargets(\(arg))"
+            ) as? [String] ?? []
+        } catch {
+            print("[MonacoDiff] saveTargets failed: \(error)")
+            return []
+        }
+    }
+
     // MARK: - Ready state
 
     fileprivate func markReady() {
@@ -230,6 +354,14 @@ final class MonacoDiffBridge: ObservableObject {
             "expandSection": NSLocalizedString("Expand file", comment: "Changes diff header: expand file section"),
             "markViewed": NSLocalizedString("Mark as viewed", comment: "Changes diff header: mark file as viewed"),
             "viewed": NSLocalizedString("Viewed", comment: "Changes diff header: viewed checkbox label"),
+            "save": NSLocalizedString("Save", comment: "Changes diff header: save edited file button"),
+            "revert": NSLocalizedString("Revert", comment: "Changes diff header: discard inline edits button"),
+            "discardEdit": NSLocalizedString(
+                "Discard unsaved edits",
+                comment: "Changes diff header: discard inline edits button tooltip"
+            ),
+            "openInEditor": NSLocalizedString("Open in Editor", comment: "Changes diff header: open file in editor button"),
+            "unsavedChanges": NSLocalizedString("Unsaved changes", comment: "Changes diff header: unsaved changes indicator"),
         ]
         guard let json = Self.jsonString(from: strings) else { return }
         webView.evaluateJavaScript("window.diffAPI.setStrings(\(json))")
@@ -247,18 +379,30 @@ final class MonacoDiffBridge: ObservableObject {
         guard let resolver = onLoadFile else { return }
         let context = reviewContext
         DispatchQueue.global(qos: .userInitiated).async {
-            let (original, modified, languageId) = resolver(filePath)
+            let (original, modified, languageId, editable) = resolver(filePath)
             DispatchQueue.main.async {
                 // The resolver belongs to the load that installed it; if a
                 // mode switch or refresh replaced the review context while git
                 // was reading, this content is from the wrong base — drop it.
                 // (JS also drops it via its own generation check.)
                 guard self.reviewContext == context else { return }
+                // Record on-disk conventions for the save path (see eolMap).
+                if modified.contains("\r\n") {
+                    self.eolMap[filePath] = "crlf"
+                } else {
+                    self.eolMap.removeValue(forKey: filePath)
+                }
+                if modified.hasPrefix("\u{FEFF}") {
+                    self.bomPaths.insert(filePath)
+                } else {
+                    self.bomPaths.remove(filePath)
+                }
                 self.loadFileContent(
                     filePath: filePath,
                     originalText: original,
                     modifiedText: modified,
-                    languageId: languageId
+                    languageId: languageId,
+                    editable: editable
                 )
                 if let context {
                     let version = ChangesView.contentVersion(original: original, modified: modified)
@@ -370,6 +514,24 @@ final class MonacoDiffBridge: ObservableObject {
                        let collapsed = body["collapsed"] as? Bool
                     {
                         self.bridge.onCollapsedChanged?(filePath, collapsed)
+                    }
+                case "contentChanged":
+                    if let filePath = body["filePath"] as? String,
+                       let dirty = body["dirty"] as? Bool
+                    {
+                        self.bridge.onContentChanged?(filePath, dirty)
+                    }
+                case "saveFile":
+                    if let filePath = body["filePath"] as? String {
+                        self.bridge.onSaveFile?(filePath)
+                    }
+                case "revertFile":
+                    if let filePath = body["filePath"] as? String {
+                        self.bridge.onRevertFile?(filePath)
+                    }
+                case "openInEditor":
+                    if let filePath = body["filePath"] as? String {
+                        self.bridge.onOpenInEditor?(filePath)
                     }
                 case "copyPath":
                     if let filePath = body["filePath"] as? String {

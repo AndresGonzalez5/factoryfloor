@@ -865,6 +865,76 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNotEqual(fpEdited, fpUntracked, "branch-mode fingerprint must change when an untracked file is added")
     }
 
+    // MARK: - Per-file delete helpers (Changes tab)
+
+    private func makeRepoWithFiles() throws -> URL {
+        let repoDir = tempDir.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "tracked\n".write(to: repoDir.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+        try "new\n".write(to: repoDir.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+        return repoDir
+    }
+
+    func testIsUntrackedFileDistinguishesTrackedFromUntracked() throws {
+        let repo = try makeRepoWithFiles()
+        XCTAssertFalse(GitOperations.isUntrackedFile(at: repo.path, filePath: "tracked.txt"))
+        XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "untracked.txt"))
+        XCTAssertFalse(GitOperations.isUntrackedFile(at: repo.path, filePath: "missing.txt"))
+    }
+
+    func testDiscardFileChangesRestoresTrackedFile() throws {
+        let repo = try makeRepoWithFiles()
+        try "modified\n".write(to: repo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(GitOperations.discardFileChanges(at: repo.path, filePath: "tracked.txt"))
+        let content = try String(contentsOf: repo.appendingPathComponent("tracked.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "tracked\n")
+        XCTAssertTrue(gitOutput(["status", "--porcelain"], in: repo).contains("??"))
+    }
+
+    func testDiscardFileChangesLeavesUntrackedFileAlone() throws {
+        let repo = try makeRepoWithFiles()
+        XCTAssertFalse(GitOperations.discardFileChanges(at: repo.path, filePath: "untracked.txt"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repo.appendingPathComponent("untracked.txt").path))
+        XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "untracked.txt"))
+    }
+
+    func testStagedNewIsNotUntrackedAndDiscardFails() throws {
+        let repo = try makeRepoWithFiles()
+        try "staged\n".write(to: repo.appendingPathComponent("staged.txt"), atomically: true, encoding: .utf8)
+        git(["add", "staged.txt"], in: repo)
+        // Staged-new files are known to the index, so they route to Discard —
+        // which must report failure (no HEAD version) so the caller can trash.
+        XCTAssertFalse(GitOperations.isUntrackedFile(at: repo.path, filePath: "staged.txt"))
+        XCTAssertTrue(GitOperations.isStagedNew(at: repo.path, filePath: "staged.txt"))
+        XCTAssertFalse(GitOperations.isStagedNew(at: repo.path, filePath: "tracked.txt"))
+        XCTAssertFalse(GitOperations.isStagedNew(at: repo.path, filePath: "untracked.txt"))
+        XCTAssertFalse(GitOperations.discardFileChanges(at: repo.path, filePath: "staged.txt"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repo.appendingPathComponent("staged.txt").path))
+    }
+
+    func testUnstageFileLeavesWorktreeCopy() throws {
+        let repo = try makeRepoWithFiles()
+        try "staged\n".write(to: repo.appendingPathComponent("staged.txt"), atomically: true, encoding: .utf8)
+        git(["add", "staged.txt"], in: repo)
+        GitOperations.unstageFile(at: repo.path, filePath: "staged.txt")
+        XCTAssertFalse(GitOperations.isStagedNew(at: repo.path, filePath: "staged.txt"))
+        XCTAssertTrue(GitOperations.isUntrackedFile(at: repo.path, filePath: "staged.txt"))
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("staged.txt"), encoding: .utf8), "staged\n")
+    }
+
+    func testIsValidUTF8RejectsNonUTF8Bytes() throws {
+        let repo = try makeRepoWithFiles()
+        let latin1 = repo.appendingPathComponent("latin1.txt")
+        try Data([0x43, 0x61, 0x66, 0xE9, 0x0A]).write(to: latin1) // "Café" in Latin-1
+        XCTAssertFalse(GitOperations.isValidUTF8(atPath: latin1.path))
+        XCTAssertTrue(GitOperations.isValidUTF8(atPath: repo.appendingPathComponent("tracked.txt").path))
+        XCTAssertFalse(GitOperations.isValidUTF8(atPath: repo.appendingPathComponent("missing.txt").path))
+    }
+
     // MARK: - Helpers
 
     @discardableResult

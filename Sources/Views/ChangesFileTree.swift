@@ -107,11 +107,18 @@ struct FileTreeNode: Identifiable, Equatable {
 struct ChangesFileTreeSidebar: View {
     let files: [DiffFile]
     @Binding var selectedFilePath: String?
-    /// False while a diff load is in flight. The tree dims and ignores
-    /// selection so a file can never be picked before its diff exists —
-    /// the select-during-load race is removed by construction.
+    /// False only while the very first load has nothing to show yet. Reloads
+    /// keep the stale tree interactive: the tree and the diff pane swap
+    /// atomically per load, so a selection can never target missing content —
+    /// the diff webview force-mounts navigated files whose bodies are still
+    /// streaming.
     var isEnabled = true
     let onSelect: (String) -> Void
+    /// Open the file in a full Editor tab (nil hides the menu item).
+    var onOpenInEditor: ((String) -> Void)? = nil
+    /// Delete/discard the file (nil hides the menu item). The caller resolves
+    /// Trash vs Discard semantics and confirms before acting.
+    var onDelete: ((DiffFile) -> Void)? = nil
 
     private var rootChildren: [FileTreeNode] {
         FileTreeNode.build(from: files).children ?? []
@@ -121,7 +128,11 @@ struct ChangesFileTreeSidebar: View {
         List(selection: $selectedFilePath) {
             Section {
                 ForEach(rootChildren) { node in
-                    ChangesFileTreeRow(node: node)
+                    ChangesFileTreeRow(
+                        node: node,
+                        onOpenInEditor: onOpenInEditor,
+                        onDelete: onDelete
+                    )
                 }
             } header: {
                 Text("Files changed")
@@ -144,6 +155,8 @@ struct ChangesFileTreeSidebar: View {
 /// children; leaves render a selectable file row with a status badge and counts.
 private struct ChangesFileTreeRow: View {
     let node: FileTreeNode
+    var onOpenInEditor: ((String) -> Void)? = nil
+    var onDelete: ((DiffFile) -> Void)? = nil
     // Directories start expanded so the tree shows files all the way down on
     // load (no clicking through each level). Users can still collapse manually.
     @State private var isExpanded = true
@@ -152,7 +165,11 @@ private struct ChangesFileTreeRow: View {
         if node.isDirectory {
             DisclosureGroup(isExpanded: $isExpanded) {
                 ForEach(node.children ?? []) { child in
-                    ChangesFileTreeRow(node: child)
+                    ChangesFileTreeRow(
+                        node: child,
+                        onOpenInEditor: onOpenInEditor,
+                        onDelete: onDelete
+                    )
                 }
             } label: {
                 Label {
@@ -163,7 +180,11 @@ private struct ChangesFileTreeRow: View {
                 }
             }
         } else {
-            ChangesFileLeafRow(node: node)
+            ChangesFileLeafRow(
+                node: node,
+                onOpenInEditor: onOpenInEditor,
+                onDelete: onDelete
+            )
                 .tag(node.id)
         }
     }
@@ -173,6 +194,8 @@ private struct ChangesFileTreeRow: View {
 /// "Bin" indicator for binary files).
 private struct ChangesFileLeafRow: View {
     let node: FileTreeNode
+    var onOpenInEditor: ((String) -> Void)? = nil
+    var onDelete: ((DiffFile) -> Void)? = nil
 
     @State private var isHovering = false
     /// Brief checkmark confirmation after a copy, cleared by a delayed reset.
@@ -192,6 +215,22 @@ private struct ChangesFileLeafRow: View {
         }
         .onHover { hovering in
             isHovering = hovering
+        }
+        .contextMenu {
+            if let onOpenInEditor {
+                Button {
+                    onOpenInEditor(node.id)
+                } label: {
+                    Label("Open in Editor", systemImage: "pencil")
+                }
+            }
+            if let onDelete, let file {
+                Button(role: .destructive) {
+                    onDelete(file)
+                } label: {
+                    Label("Delete…", systemImage: "trash")
+                }
+            }
         }
     }
 

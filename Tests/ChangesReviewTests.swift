@@ -102,8 +102,7 @@ final class ChangesContentLimitTests: XCTestCase {
         XCTAssertNotEqual(v1, ChangesView.contentVersion(original: "z", modified: "b"))
     }
 
-    func testReviewVersionsStrongForBodiesWeakForPlaceholders() {
-        var binaryFile = DiffFile(relativePath: "big.bin", status: .added, isBinary: true)
+    func testReviewVersionsStrongForBodiesWeakForPlaceholders() {        var binaryFile = DiffFile(relativePath: "big.bin", status: .added, isBinary: true)
         binaryFile.mtimeHint = 1234.5
         var hugeFile = DiffFile(relativePath: "huge.txt", status: .modified, changedLines: 9999)
         hugeFile.added = 6000
@@ -126,6 +125,71 @@ final class ChangesContentLimitTests: XCTestCase {
         XCTAssertEqual(
             versions["huge.txt"],
             ChangesViewStateStore.weakVersion(for: hugeFile)
+        )
+    }
+
+    func testShellsStripTextsAndFlagPendingForNormalFiles() {
+        let payload: [[String: Any]] = [
+            ["filePath": "a.swift", "originalText": "old", "modifiedText": "new", "changedLines": 4],
+            ["filePath": "big.bin", "binary": true, "originalText": "", "modifiedText": ""],
+            ["filePath": "huge.txt", "deferred": true, "originalText": "", "modifiedText": ""],
+        ]
+        let shells = ChangesView.shells(from: payload)
+        XCTAssertEqual(shells.count, 3)
+        let normal = shells.first { $0["filePath"] as? String == "a.swift" }
+        XCTAssertEqual(normal?["originalText"] as? String, "")
+        XCTAssertEqual(normal?["modifiedText"] as? String, "")
+        XCTAssertEqual(normal?["pending"] as? Bool, true)
+        // Placeholders pass through untouched (no pending flag, no texts to strip).
+        let binary = shells.first { $0["filePath"] as? String == "big.bin" }
+        XCTAssertNil(binary?["pending"])
+        let deferred = shells.first { $0["filePath"] as? String == "huge.txt" }
+        XCTAssertNil(deferred?["pending"])
+    }
+
+    func testBodyEntriesContainOnlyNormalFiles() {
+        let payload: [[String: Any]] = [
+            ["filePath": "a.swift", "originalText": "old", "modifiedText": "new"],
+            ["filePath": "big.bin", "binary": true, "originalText": "", "modifiedText": ""],
+            ["filePath": "huge.txt", "deferred": true, "originalText": "", "modifiedText": ""],
+        ]
+        let bodies = ChangesView.bodyEntries(from: payload)
+        XCTAssertEqual(bodies.count, 1)
+        XCTAssertEqual(bodies.first?["filePath"] as? String, "a.swift")
+        // Bodies keep their texts for streaming.
+        XCTAssertEqual(bodies.first?["modifiedText"] as? String, "new")
+    }
+
+    func testDetectEOLFindsCRLF() {
+        XCTAssertEqual(ChangesView.detectEOL("a\r\nb\r\n"), "crlf")
+        XCTAssertEqual(ChangesView.detectEOL("a\nb\n"), "lf")
+        XCTAssertEqual(ChangesView.detectEOL("no newlines"), "lf")
+        XCTAssertEqual(ChangesView.detectEOL(""), "lf")
+    }
+
+    func testEncodeForSaveRestoresCRLFAndBOM() {
+        // Monaco hands back LF without BOM; the save path restores both.
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\nb\n", eol: "crlf", bom: false),
+            "a\r\nb\r\n"
+        )
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\n", eol: "lf", bom: true),
+            "\u{FEFF}a\n"
+        )
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\n", eol: "lf", bom: false),
+            "a\n"
+        )
+        // Already-CRLF fragments must not double up.
+        XCTAssertEqual(
+            ChangesView.encodeForSave("a\r\nb\n", eol: "crlf", bom: false),
+            "a\r\nb\r\n"
+        )
+        // A surviving BOM is never duplicated.
+        XCTAssertEqual(
+            ChangesView.encodeForSave("\u{FEFF}a\n", eol: "lf", bom: true),
+            "\u{FEFF}a\n"
         )
     }
 

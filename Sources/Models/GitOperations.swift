@@ -635,6 +635,14 @@ enum GitOperations {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// Strict UTF-8 check for a file on disk. The Changes tab only enables
+    /// inline diff editing when this passes: saving a lossy-decoded file back
+    /// would persist U+FFFD replacements over the original bytes (corruption).
+    static func isValidUTF8(atPath path: String) -> Bool {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return false }
+        return String(data: data, encoding: .utf8) != nil
+    }
+
     /// Create a git worktree for a workstream, branching off the default branch.
     /// Returns the worktree path on success, nil on failure.
     static func createWorktree(projectPath: String, projectName: String, workstreamName: String, symlinkEnv: Bool = true) -> String? {
@@ -793,6 +801,43 @@ enum GitOperations {
         _ = run(args: ["reset", "HEAD"], in: path)
         _ = run(args: ["checkout", "--", "."], in: path)
         _ = run(args: ["clean", "-fd"], in: path)
+    }
+
+    /// Whether a worktree-relative file is untracked (present on disk but known
+    /// to neither HEAD nor the index). The Changes tab lists untracked files as
+    /// `.added`, so callers use this to pick Trash (untracked) vs Discard
+    /// (tracked) semantics for a per-file delete.
+    static func isUntrackedFile(at path: String, filePath: String) -> Bool {
+        guard let out = run(
+            args: ["ls-files", "--others", "--exclude-standard", "--", filePath],
+            in: path
+        ) else { return false }
+        return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Whether a worktree-relative file is staged-new (added to the index but
+    /// with no HEAD version). Discard-via-checkout can't restore these, so the
+    /// Changes tab trashes them like untracked files (after unstaging).
+    static func isStagedNew(at path: String, filePath: String) -> Bool {
+        guard let out = run(args: ["status", "--porcelain", "--", filePath], in: path) else { return false }
+        return out.split(separator: "\n").contains { $0.first == "A" }
+    }
+
+    /// Unstage a path without touching the worktree copy.
+    static func unstageFile(at path: String, filePath: String) {
+        _ = run(args: ["reset", "HEAD", "--", filePath], in: path)
+    }
+
+    /// Discard a single tracked file's uncommitted changes: unstage, then
+    /// restore the worktree copy from HEAD. Mirrors `discardAllChanges` scoped
+    /// to one path (same `reset` + `checkout` pair, so behavior matches).
+    /// Returns false when the restore failed — staged-new files (no HEAD
+    /// version) and renames (no HEAD version at the new path) — leaving the
+    /// worktree untouched so the caller can offer Trash instead.
+    @discardableResult
+    static func discardFileChanges(at path: String, filePath: String) -> Bool {
+        guard run(args: ["reset", "HEAD", "--", filePath], in: path) != nil else { return false }
+        return run(args: ["checkout", "--", filePath], in: path) != nil
     }
 
     private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {

@@ -135,7 +135,7 @@ Every workstream terminal has access to:
 | `Cmd+B` | New Browser (starts the dev server) |
 | `Cmd+O` | New Editor |
 | `Cmd+P` | Find File (Editor) |
-| `Cmd+S` | Save (Editor) |
+| `Cmd+S` | Save (Editor, Changes) |
 | `Cmd+Shift+S` | Save As (Editor) |
 | `Cmd+W` | Close tab |
 | `Cmd+Shift+W` | Archive workstream |

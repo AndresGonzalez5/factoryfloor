@@ -13,7 +13,6 @@ APP_PATH="$BUILD_DIR/Build/Products/Debug/$APP_NAME.app"
 SPM_CACHE="$HOME/Library/Caches/factoryfloor/spm"
 BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 GHOSTTY_RESOURCES="ghostty/zig-out/share"
-MONACO_OUTPUT="Resources/MonacoEditor/index.html"
 
 ensure_ghostty_resources() {
   if [ ! -d "$GHOSTTY_RESOURCES/terminfo" ] || [ ! -d "$GHOSTTY_RESOURCES/ghostty" ]; then
@@ -24,10 +23,10 @@ ensure_ghostty_resources() {
 }
 
 ensure_monaco_editor() {
-  if [ ! -f "$MONACO_OUTPUT" ]; then
-    echo "info: Monaco editor not built, running scripts/build-editor.sh..."
-    bash scripts/build-editor.sh
-  fi
+  # Always delegate: build-editor.sh self-skips when the output is newer than
+  # every source file. Gating on existence here instead would silently ship a
+  # stale bundle after editor/src changes.
+  bash scripts/build-editor.sh
 }
 
 case "${1:-build}" in

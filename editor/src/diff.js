@@ -1,7 +1,10 @@
 import { monaco, configService, postToSwift } from './shared-init.js'
 
 // --- Diff API ---
-// Renders a vertical stack of inline diff editors, one per file. Editors are
+// Renders a vertical stack of inline diff editors, one per file. Swift sends
+// metadata-only shells first (headers + placeholders paint synchronously),
+// then streams each normal file's texts via loadFileContent, which upgrades
+// its skeleton in place. Editors are
 // LAZY-mounted: headers + placeholders for every file are built synchronously
 // (cheap DOM), while real Monaco editors mount only when their section nears
 // the viewport (IntersectionObserver) and unmount when scrolled far away.
@@ -18,6 +21,10 @@ const LINE_HEIGHT = 19
 const MIN_EDITOR_HEIGHT = 60
 // Extra lines added to the initial estimate to cover diff decorations/widgets.
 const PADDING_LINES = 2
+// Extra context lines assumed visible around changes in the pre-diff estimate.
+// Deliberately small: underestimates grow (off-screen, invisible) once the
+// diff is measured, while overestimates leave permanent blank scroll gaps.
+const ESTIMATE_CONTEXT_LINES = 8
 // Padding added to the measured content height when sizing the container.
 const HEIGHT_PADDING = 8
 // Mount editors this far (px) beyond the viewport so scrolling never shows a
@@ -35,13 +42,24 @@ const STR = {
   collapseSection: 'Collapse file',
   expandSection: 'Expand file',
   markViewed: 'Mark as viewed',
-  viewed: 'Viewed'
+  viewed: 'Viewed',
+  save: 'Save',
+  revert: 'Revert',
+  discardEdit: 'Discard unsaved edits',
+  openInEditor: 'Open in Editor',
+  unsavedChanges: 'Unsaved changes'
 }
 
 // Active sections keyed by file path:
 // { section, host, editor, original, modified, file, mountable, mounted,
-//   diffFired, collapsed, gen }
+//   diffFired, collapsed, gen, dirty, cleanVersionId, contentListener,
+//   contentSizeListener, syncEditUI, pendingBody, deferredNote, loadingRequested,
+//   collapseBody, headerEl, viewedBox, syncChevron }
 const sections = new Map()
+// Path of the last-focused modified editor (sticky: updated on focus, never
+// cleared on blur) so Cmd+S can save the file being typed in without a click.
+// Reset on every setFiles/clear alongside the sections it points into.
+let focusedPath = null
 // Paths (current generation) awaiting their first diff before contentReady.
 let pendingVisible = new Set()
 let reported = false
@@ -97,22 +115,59 @@ function calculateEditorHeight(originalText, modifiedText) {
 // hideUnchangedRegions folding) so the stacked page has no trailing gray gap.
 // Stale-generation callbacks (disposed editors of a previous render) are
 // ignored: resizing a recycled host would corrupt the new render's layout.
+// Height is the max of both sides (mirroring VS Code's multi-diff editor, which
+// sizes stacked items from the diff editor's combined content height): reading
+// only the modified side under-measures pure-deletion hunks.
 function resizeDiffEditor(diffEditor, host, gen) {
   if (gen !== jsGeneration) return
   const modifiedEditor = diffEditor.getModifiedEditor()
-  const contentHeight = modifiedEditor.getContentHeight()
+  const originalEditor = diffEditor.getOriginalEditor()
+  const contentHeight = Math.max(
+    modifiedEditor.getContentHeight(),
+    originalEditor ? originalEditor.getContentHeight() : 0
+  )
   const newHeight = Math.max(contentHeight + HEIGHT_PADDING, MIN_EDITOR_HEIGHT)
+  // No-op when unchanged: breaks the layout→contentSizeChange→layout cycle
+  // (the content-size listener below calls back into here on every change).
+  if (host.style.height === `${newHeight}px`) return
   host.style.height = `${newHeight}px`
   diffEditor.layout()
 }
 
+// Dirty tracking for an editable mounted editor: version-id compare (same
+// technique as main.js), reported to Swift so it can show progress + guard
+// refreshes. Typing also resizes the host immediately so the page grows with
+// the edit instead of waiting for the diff recompute.
+function attachContentListener(entry) {
+  const file = entry.file
+  const host = entry.host
+  const gen = entry.gen
+  const diffEditor = entry.editor
+  const modified = entry.modified
+  if (!diffEditor || !modified) return
+  entry.contentListener = modified.onDidChangeContent(() => {
+    if (entry.gen !== jsGeneration) return
+    const dirty = modified.getAlternativeVersionId() !== entry.cleanVersionId
+    if (dirty !== entry.dirty) {
+      entry.dirty = dirty
+      if (entry.syncEditUI) entry.syncEditUI()
+      postToSwift({ type: 'contentChanged', filePath: file.filePath, dirty })
+    }
+    resizeDiffEditor(diffEditor, host, gen)
+  })
+}
+
 function disposeEditor(entry) {
+  if (entry.contentListener) entry.contentListener.dispose()
+  if (entry.contentSizeListener) entry.contentSizeListener.dispose()
   if (entry.editor) entry.editor.dispose()
   if (entry.original) entry.original.dispose()
   if (entry.modified) entry.modified.dispose()
   entry.editor = null
   entry.original = null
   entry.modified = null
+  entry.contentListener = null
+  entry.contentSizeListener = null
   entry.mounted = false
 }
 
@@ -126,6 +181,7 @@ function clearDiffs() {
   for (const entry of sections.values()) disposeSection(entry)
   sections.clear()
   pendingVisible.clear()
+  focusedPath = null
   // Remove every child except the empty-state placeholder.
   for (const child of Array.from(container.children)) {
     if (child !== emptyState) child.remove()
@@ -137,11 +193,29 @@ function isNearViewport(el, margin) {
   return r.bottom >= -margin && r.top <= window.innerHeight + margin
 }
 
+// Mount every unmounted mountable section already near the viewport.
+// Covers chunk turns lost to rAF stalls (hidden webview): those files are
+// observed, but observation only fires on scroll — without this sweep they'd
+// sit blank until the user scrolls or toggles collapse.
+function sweepNearViewport(gen) {
+  if (gen !== jsGeneration) return
+  for (const entry of sections.values()) {
+    if (entry.gen !== gen) continue
+    if (!entry.mountable || entry.collapsed || entry.mounted || !entry.host) continue
+    if (isNearViewport(entry.host, MOUNT_MARGIN)) mountEditor(entry)
+  }
+}
+
 function mountEditor(entry) {
   if (entry.mounted || !entry.mountable || entry.collapsed) return
   if (entry.gen !== jsGeneration) return
   const host = entry.host
   if (!host) return
+  // Defer creation while the page has no layout yet (e.g. setFiles racing a
+  // tab-switch reparent): editors born in a zero-size host render blank and
+  // never recover. The host stays observed, so the mount observer picks it up
+  // once the container has size.
+  if (host.clientWidth === 0) return
   const file = entry.file
   const gen = entry.gen
   host.classList.remove('unmounted')
@@ -149,7 +223,13 @@ function mountEditor(entry) {
   const original = monaco.editor.createModel(file.originalText ?? '', file.languageId || 'plaintext')
   const modified = monaco.editor.createModel(file.modifiedText ?? '', file.languageId || 'plaintext')
 
-  const diffEditor = monaco.editor.createDiffEditor(host, sharedDiffOptions)
+  // Uncommitted-mode files are editable in place (VS Code Source Control
+  // style): only the modified side is writable, the original stays read-only.
+  const editable = !!file.editable && file.status !== 'D'
+  const options = editable
+    ? { ...sharedDiffOptions, readOnly: false, originalEditable: false }
+    : sharedDiffOptions
+  const diffEditor = monaco.editor.createDiffEditor(host, options)
   diffEditor.setModel({ original, modified })
 
   // handleMouseWheel is off so vertical wheel events bubble to the page (the
@@ -157,25 +237,44 @@ function mountEditor(entry) {
   // route horizontal-dominant wheel events (trackpad swipe, shift+scroll) into
   // the diff editor's horizontal scroll. Vertical-dominant events are left to
   // the page so browsing between files keeps working.
-  host.addEventListener('wheel', (e) => {
-    const horizontalIntent = e.shiftKey && e.deltaY !== 0
-    const dominantX = Math.abs(e.deltaX) > Math.abs(e.deltaY)
-    if (!horizontalIntent && !dominantX) return
-    const delta = scaleWheelDelta(
-      horizontalIntent ? e.deltaY : e.deltaX,
-      e.deltaMode
-    )
-    if (delta === 0) return
-    const modifiedEditor = diffEditor.getModifiedEditor()
-    modifiedEditor.setScrollLeft(modifiedEditor.getScrollLeft() + delta)
-    e.preventDefault()
-  })
+  // Bound once per host (hosts survive unmount/remount cycles; re-adding
+  // on every mount stacks duplicate handlers), so the editor is resolved
+  // live at event time: closing over this mount's diffEditor would keep
+  // driving the disposed editor after the next remount. Capture phase so an
+  // inner Monaco scrollable can't stop propagation first; non-passive so
+  // preventDefault is honored.
+  if (!host.dataset.wheelBound) {
+    host.dataset.wheelBound = '1'
+    host.addEventListener('wheel', (e) => {
+      const horizontalIntent = e.shiftKey && e.deltaY !== 0
+      const dominantX = Math.abs(e.deltaX) > Math.abs(e.deltaY)
+      if (!horizontalIntent && !dominantX) return
+      const delta = scaleWheelDelta(
+        horizontalIntent ? e.deltaY : e.deltaX,
+        e.deltaMode
+      )
+      if (delta === 0) return
+      const live = entry.editor?.getModifiedEditor()
+      if (!live) return
+      live.setScrollLeft(live.getScrollLeft() + delta)
+      e.preventDefault()
+    }, { capture: true, passive: false })
+  }
 
   entry.editor = diffEditor
   entry.original = original
   entry.modified = modified
   entry.mounted = true
   if (farObserver && host.isConnected) farObserver.observe(host)
+
+  // Dirty tracking for editable files (see attachContentListener).
+  if (editable) {
+    entry.cleanVersionId = modified.getAlternativeVersionId()
+    entry.dirty = false
+    // Sticky focus tracking for Cmd+S (dropped with the editor on dispose).
+    diffEditor.getModifiedEditor().onDidFocusEditorText(() => { focusedPath = file.filePath })
+    attachContentListener(entry)
+  }
 
   // onDidUpdateDiff can fire multiple times per editor (layout, folding);
   // only the first firing counts toward contentReady.
@@ -188,12 +287,27 @@ function mountEditor(entry) {
       if (pendingVisible.size === 0) reportContentReady(gen)
     }
   })
+
+  // Resize on every content-size change (diff computed, unchanged regions
+  // hidden/revealed, typing, wrapping). Same signal VS Code's own multi-diff
+  // editor uses to size stacked items. onDidUpdateDiff alone is not enough: it
+  // can fire before hideUnchangedRegions settles, permanently stranding the
+  // host at full-file height (the giant-blank-gap bug). Guarded: the event is
+  // absent from the public IDiffEditor typings (only on the widget runtime).
+  if (typeof diffEditor.onDidContentSizeChange === 'function') {
+    entry.contentSizeListener = diffEditor.onDidContentSizeChange(() => {
+      if (entry.gen !== jsGeneration) return
+      resizeDiffEditor(diffEditor, host, gen)
+    })
+  }
 }
 
 // Free a far-off-screen editor. The host keeps its measured pixel height, so
 // disposal is scroll-position neutral; the mount observer remounts on return.
+// Dirty (unsaved) editors are NEVER unmounted — disposal would drop the edit.
 function unmountEditor(entry) {
   if (!entry.mounted) return
+  if (entry.dirty) return
   if (entry.host) {
     if (mountObserver) mountObserver.unobserve(entry.host)
     if (farObserver) farObserver.unobserve(entry.host)
@@ -252,6 +366,7 @@ function ensureObservers() {
 function makeHeader(file, entry) {
   const header = document.createElement('div')
   header.className = 'diff-header'
+  entry.headerEl = header
 
   // Collapse chevron (GitHub-style per-file collapse).
   const chevron = document.createElement('button')
@@ -317,6 +432,15 @@ function makeHeader(file, entry) {
   copy.appendChild(checkIcon)
   header.appendChild(copy)
 
+  // Inline-edit controls (VS Code Source Control style). Only for editable
+  // files with loaded content — deleted/binary/deferred placeholders never
+  // get them here. Deferred files get them on upgrade (see loadFileContent),
+  // and so do pending shells once their streamed bodies arrive: adding them
+  // earlier would let Save persist the empty shell text over the real file.
+  if (isEditCapable(file) && !file.deferred && !file.pending) {
+    addEditControls(header, file, entry, null)
+  }
+
   // Viewed checkbox (right-aligned, GitHub-style). State persists in Swift;
   // Swift clears it when the file's content changes under the mark.
   const viewedWrap = document.createElement('label')
@@ -330,6 +454,10 @@ function makeHeader(file, entry) {
   viewedBox.addEventListener('change', () => {
     entry.section.classList.toggle('viewed', viewedBox.checked)
     postToSwift({ type: 'viewed', filePath: file.filePath, viewed: viewedBox.checked })
+    // GitHub-style: marking viewed collapses the file. Unchecking leaves the
+    // collapsed state alone (expand via chevron). setCollapsed notifies Swift,
+    // so persistence and the toolbar toggle mirror update automatically.
+    if (viewedBox.checked) setCollapsed(entry, true, true)
   })
   const viewedLabel = document.createElement('span')
   viewedLabel.className = 'viewed-label'
@@ -340,6 +468,78 @@ function makeHeader(file, entry) {
   entry.viewedBox = viewedBox
 
   return header
+}
+
+// Whether a file can ever show inline-edit controls: flagged editable by
+// Swift (uncommitted mode) and not deleted/binary. Deferred files qualify —
+// their controls are added on upgrade once real content is loaded.
+function isEditCapable(file) {
+  return !!file.editable && file.status !== 'D' && !file.binary
+}
+
+// Build the Save / dirty-dot / Open-in-Editor header controls. `before` is
+// an optional child to insert ahead of (used on deferred upgrade, where the
+// Viewed checkbox already exists).
+function addEditControls(header, file, entry, before) {
+  if (entry.syncEditUI) return
+  const dirtyDot = document.createElement('span')
+  dirtyDot.className = 'dirty-dot'
+  dirtyDot.textContent = '●'
+  dirtyDot.title = STR.unsavedChanges
+  dirtyDot.setAttribute('aria-label', STR.unsavedChanges)
+  dirtyDot.hidden = true
+
+  const save = document.createElement('button')
+  save.className = 'save-btn'
+  save.type = 'button'
+  save.textContent = STR.save
+  save.title = STR.unsavedChanges
+  save.disabled = true
+  save.addEventListener('click', () => {
+    postToSwift({ type: 'saveFile', filePath: file.filePath })
+  })
+
+  const open = document.createElement('button')
+  open.className = 'open-btn'
+  open.type = 'button'
+  open.textContent = '↗'
+  open.title = STR.openInEditor
+  open.setAttribute('aria-label', STR.openInEditor)
+  open.addEventListener('click', () => {
+    postToSwift({ type: 'openInEditor', filePath: file.filePath })
+  })
+
+  // Revert (VS Code Source Control style): drop the inline edit and restore
+  // the last loaded text. The escape hatch for the refresh/mode-switch
+  // guards, which block while any edit is unsaved.
+  const revert = document.createElement('button')
+  revert.className = 'save-btn'
+  revert.type = 'button'
+  revert.textContent = STR.revert
+  revert.title = STR.discardEdit
+  revert.setAttribute('aria-label', STR.discardEdit)
+  revert.disabled = true
+  revert.addEventListener('click', () => {
+    postToSwift({ type: 'revertFile', filePath: file.filePath })
+  })
+
+  if (before) {
+    header.insertBefore(dirtyDot, before)
+    header.insertBefore(save, before)
+    header.insertBefore(revert, before)
+    header.insertBefore(open, before)
+  } else {
+    header.appendChild(dirtyDot)
+    header.appendChild(save)
+    header.appendChild(revert)
+    header.appendChild(open)
+  }
+
+  entry.syncEditUI = () => {
+    save.disabled = !entry.dirty
+    revert.disabled = !entry.dirty
+    dirtyDot.hidden = !entry.dirty
+  }
 }
 
 function setCollapsed(entry, collapsed, notify) {
@@ -369,9 +569,22 @@ function makePlaceholderHost(entry, file) {
   const host = document.createElement('div')
   host.className = 'diff-body unmounted'
   host.dataset.filePath = file.filePath
-  host.style.height = `${calculateEditorHeight(file.originalText, file.modifiedText)}px`
+  host.style.height = `${estimateEditorHeight(file)}px`
   entry.host = host
   return host
+}
+
+// Pre-diff host height. Estimated from the changed line count — not the full
+// file length: hideUnchangedRegions folds everything else away, so full-file
+// estimates reserve thousands of pixels of blank scroll space for sections
+// that haven't measured yet. Underestimates are harmless (hosts grow on mount,
+// ~1200px before becoming visible); overestimates are the blank-gap bug.
+function estimateEditorHeight(file) {
+  if (typeof file.changedLines === 'number' && file.changedLines >= 0) {
+    const lines = file.changedLines + ESTIMATE_CONTEXT_LINES + PADDING_LINES
+    return Math.max(lines * LINE_HEIGHT, MIN_EDITOR_HEIGHT)
+  }
+  return calculateEditorHeight(file.originalText, file.modifiedText)
 }
 
 // Normalize a wheel delta to pixels. Line-based (mouse wheels) and page-based
@@ -398,8 +611,12 @@ window.diffAPI = {
     }
     emptyState.classList.remove('visible')
 
-    // Safety: report ready after 5s even if some onDidUpdateDiff never fires.
-    safetyTimer = setTimeout(() => reportContentReady(myGen), 5000)
+    // Safety: after 5s, mount anything near that never got going (rAF stall)
+    // and report ready even if some onDidUpdateDiff never fires.
+    safetyTimer = setTimeout(() => {
+      sweepNearViewport(myGen)
+      reportContentReady(myGen)
+    }, 5000)
 
     for (const file of files) {
       const section = document.createElement('div')
@@ -456,6 +673,23 @@ window.diffAPI = {
         continue
       }
 
+      // Pending shells (shells-first transport): bodies stream in via
+      // loadFileContent right after first paint. A textless shimmer block at
+      // the estimated height — never observed, never clickable — upgraded by
+      // the shared deferred path on delivery.
+      if (file.pending) {
+        const note = document.createElement('div')
+        note.className = 'placeholder placeholder-pending'
+        note.dataset.filePath = file.filePath
+        note.style.minHeight = `${estimateEditorHeight(file)}px`
+        section.appendChild(note)
+        entry.collapseBody = note
+        entry.pendingBody = true
+        container.appendChild(section)
+        sections.set(file.filePath, entry)
+        continue
+      }
+
       const host = makePlaceholderHost(entry, file)
       section.appendChild(host)
       entry.collapseBody = host
@@ -468,11 +702,15 @@ window.diffAPI = {
     // frames so a huge repo doesn't block first paint), then observe the rest.
     // contentReady waits only for THESE editors — below-the-fold files mount
     // (and diff) on scroll without holding the loading indicator.
+    // Every mountable host is observed up front: chunk-mounting below can
+    // stall partway (rAF pauses while the webview is hidden), and a file that
+    // misses its chunk turn would otherwise sit blank forever — no observer
+    // would ever mount it on scroll. Collapse/expand only masked this.
     const mountables = []
     for (const entry of sections.values()) {
       if (!entry.mountable || entry.collapsed || !entry.host) continue
+      if (mountObserver) mountObserver.observe(entry.host)
       if (isNearViewport(entry.host, MOUNT_MARGIN)) mountables.push(entry)
-      else if (mountObserver) mountObserver.observe(entry.host)
     }
     pendingVisible = new Set(mountables.map(e => e.file.filePath))
 
@@ -487,14 +725,14 @@ window.diffAPI = {
       const slice = mountables.slice(i, i + CHUNK)
       for (const entry of slice) {
         mountEditor(entry)
-        // Mounted editors still need scroll-away disposal tracking.
-        if (mountObserver && entry.host) mountObserver.observe(entry.host)
       }
       i += CHUNK
       if (i < mountables.length) {
         requestAnimationFrame(mountChunk)
-      } else if (pendingVisible.size === 0) {
-        reportContentReady(myGen)
+      } else {
+        // Queue drained: mount anything near that lost its turn to a stall.
+        sweepNearViewport(myGen)
+        if (pendingVisible.size === 0) reportContentReady(myGen)
       }
     }
     requestAnimationFrame(mountChunk)
@@ -516,12 +754,18 @@ window.diffAPI = {
       placeholder.remove()
     }
     entry.deferredNote = null
+    entry.pendingBody = false
 
-    entry.file = { ...entry.file, ...file, deferred: false }
+    entry.file = { ...entry.file, ...file, deferred: false, pending: false }
     entry.mountable = true
     const host = makePlaceholderHost(entry, entry.file)
     section.appendChild(host)
     entry.collapseBody = host
+    // Deferred files flagged editable gain their Save/Open controls now that
+    // real content exists. Insert ahead of the Viewed checkbox (last child).
+    if (isEditCapable(entry.file) && entry.headerEl) {
+      addEditControls(entry.headerEl, entry.file, entry, entry.headerEl.lastChild)
+    }
     if (entry.collapsed) return
     mountEditor(entry)
     if (mountObserver && host.isConnected) mountObserver.observe(host)
@@ -554,6 +798,88 @@ window.diffAPI = {
     }
   },
 
+  // Current modified-side text for a file: live editor content when mounted,
+  // otherwise the last loaded text. Swift reads this to persist an edit.
+  getContent(path) {
+    const entry = sections.get(path)
+    if (!entry) return null
+    if (entry.mounted && entry.modified) return entry.modified.getValue()
+    return entry.file.modifiedText ?? null
+  },
+
+  // Ordered save targets for Cmd+S: the focused dirty file wins (the one
+  // being typed in); else the selected tree file when dirty; else every dirty
+  // file — an explicit Save persists all Changes-tab work. Empty when clean.
+  saveTargets(selectedPath) {
+    const dirty = []
+    for (const [path, entry] of sections) {
+      if (entry.dirty) dirty.push(path)
+    }
+    if (dirty.length === 0) return []
+    if (focusedPath) {
+      const focused = sections.get(focusedPath)
+      if (focused && focused.dirty) return [focusedPath]
+    }
+    if (selectedPath && dirty.includes(selectedPath)) return [selectedPath]
+    return dirty
+  },
+
+  // Mark a model as clean (after save). Always clears the JS dirty flag —
+  // even when unmounted — so the JS mirror can never disagree with Swift's.
+  markClean(path) {
+    const entry = sections.get(path)
+    if (!entry) return
+    entry.dirty = false
+    if (entry.syncEditUI) entry.syncEditUI()
+    if (!entry.mounted || !entry.modified) return
+    entry.cleanVersionId = entry.modified.getAlternativeVersionId()
+  },
+
+  // Replace a file's texts in place (revert-to-disk, post-save refresh):
+  // updates the stored texts and, when mounted, both live models. The dirty
+  // listener is detached across the programmatic set so no spurious
+  // contentChanged messages escape; Swift clears its own mirrors after this
+  // returns. No-op for unknown paths or superseded generations.
+  setFileContent(payload) {
+    const entry = sections.get(payload?.filePath)
+    if (!entry || entry.gen !== jsGeneration) return
+    const originalText = payload.originalText ?? ''
+    const modifiedText = payload.modifiedText ?? ''
+    entry.file = { ...entry.file, originalText, modifiedText }
+    if (entry.mounted && entry.editor && entry.original && entry.modified) {
+      if (entry.contentListener) entry.contentListener.dispose()
+      entry.contentListener = null
+      entry.original.setValue(originalText)
+      entry.modified.setValue(modifiedText)
+      entry.cleanVersionId = entry.modified.getAlternativeVersionId()
+      entry.dirty = false
+      if (entry.syncEditUI) entry.syncEditUI()
+      if (entry.file.editable && entry.file.status !== 'D') attachContentListener(entry)
+      resizeDiffEditor(entry.editor, entry.host, entry.gen)
+    } else {
+      entry.dirty = false
+      if (entry.syncEditUI) entry.syncEditUI()
+    }
+  },
+
+  // Drop one file's section entirely (post-delete prune while other dirty
+  // files block a full reload). Disposes its editor; scroll neighbors keep
+  // their measured heights so the removal is position-neutral for them.
+  removeFile(path) {
+    const entry = sections.get(path)
+    if (!entry || entry.gen !== jsGeneration) return
+    if (mountObserver) {
+      if (entry.host) mountObserver.unobserve(entry.host)
+      if (entry.deferredNote) mountObserver.unobserve(entry.deferredNote)
+    }
+    if (farObserver && entry.host) farObserver.unobserve(entry.host)
+    disposeSection(entry)
+    if (entry.section) entry.section.remove()
+    sections.delete(path)
+    pendingVisible.delete(path)
+    if (focusedPath === path) focusedPath = null
+  },
+
   // Set one file's Viewed checkbox from Swift (e.g. clearing a stale mark).
   setViewed(path, viewed) {
     const entry = sections.get(path)
@@ -564,10 +890,17 @@ window.diffAPI = {
 
   // Collapse/expand every section at once. Expanding mounts only sections
   // already near the viewport; the mount observer handles the rest on scroll.
+  // Per-entry guard: one failing section (e.g. a Monaco mount throwing after
+  // its class already toggled) must never abort the loop and strand the rest
+  // in the old state. Failures are reported to Swift for diagnosis.
   setAllCollapsed(collapsed) {
     for (const entry of sections.values()) {
       if (entry.collapsed === !!collapsed) continue
-      setCollapsed(entry, !!collapsed, false)
+      try {
+        setCollapsed(entry, !!collapsed, false)
+      } catch (e) {
+        postToSwift({ type: 'error', message: `setAllCollapsed failed for ${entry.file?.filePath}: ${e?.message ?? e}` })
+      }
     }
   },
 
